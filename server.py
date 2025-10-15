@@ -36,12 +36,21 @@ class ExplainRequest(BaseModel):
     levels: Optional[str] = Field("beginner", example="beginner")  # beginner, university, researcher
     session_id: Optional[str] = None
 
+class PdfChunk(BaseModel):
+    """Represents a relevant PDF chunk with metadata."""
+    chunk_text: str
+    page_number: int
+    chunk_index: int
+    relevance_score: float
+    filename: str
+
 class ExplainResponse(BaseModel):
     question: str
     explanation: str
     example: str
     levels: str  # beginner, university, researcher
     session_id: str
+    pdf_chunks: Optional[List[PdfChunk]] = None  # PDF chunks if available
 
 class FlashcardRequest(BaseModel):
     topic: Optional[str] = None  # Optional - uses session topic if not provided
@@ -183,33 +192,55 @@ def health_check():
 
 @app.post("/api/explain", response_model=ExplainResponse)
 def explain_concept(request: ExplainRequest):
-    """
-    Explain an AI/ML concept in simple terms with examples.
-    Automatically creates or uses existing session for tracking.
-    Levels: beginner, university, researcher
-    """
-    # Create or get session
     session_id = request.session_id
     if not session_id or not session_manager.session_exists(session_id):
-        session_id = session_manager.create_session()
-    
-    # Refine user input first
+        session_id = session_manager.create_session()    
     refined_question = langchain_handler.refine_user_input(request.question)
-    levels = request.levels or "beginner"
-    
-    # Append topic to session (supports multiple topics)
+    levels = request.levels or "beginner"    
     session_manager.set_topic(session_id, refined_question, levels)
     
-    # Save input
+    # Check if session has PDF and search for relevant chunks
+    pdf_chunks = None
+    pdf_context = ""
+    pdf_info = vector_db.get_session_pdf_info(session_id)
+    
+    if pdf_info and pdf_info.get("has_pdf", False):
+        # Search PDF chunks relevant to the question
+        search_results = vector_db.search_pdf_chunks(
+            query=refined_question,
+            session_id=session_id,
+            n_results=5
+        )
+        
+        if search_results:
+            pdf_chunks = [
+                PdfChunk(
+                    chunk_text=chunk["document"],
+                    page_number=chunk["metadata"]["page_number"],
+                    chunk_index=chunk["metadata"]["chunk_index"],
+                    relevance_score=chunk.get("relevance_score", 0.0),
+                    filename=chunk["metadata"]["filename"]
+                )
+                for chunk in search_results
+            ]
+            
+            # Create context from PDF chunks for the AI
+            pdf_context = "\n\nRelevant information from uploaded PDF:\n"
+            for chunk in pdf_chunks:
+                pdf_context += f"\n[Page {chunk.page_number}]: {chunk.chunk_text[:500]}...\n"
+    
     session_manager.save_context(
         session_id, 
-        f"Topic: {refined_question}\nLevels: {levels}"
+        f"Topic: {refined_question}\nLevels: {levels}\nHas PDF: {pdf_info.get('has_pdf', False) if pdf_info else False}"
     )
     
-    # Generate explanation using LangChain
-    result = langchain_handler.generate_explanation(refined_question, levels)
+    # Generate explanation (with PDF context if available)
+    result = langchain_handler.generate_explanation(
+        refined_question, 
+        levels,
+        context=pdf_context if pdf_context else ""
+    )
     
-    # Save history
     session_manager.save_history(
         session_id,
         refined_question,
@@ -222,13 +253,12 @@ def explain_concept(request: ExplainRequest):
         explanation=result["explanation"],
         example=result["example"],
         levels=levels,
-        session_id=session_id
+        session_id=session_id,
+        pdf_chunks=pdf_chunks
     )
 
 @app.post("/api/flashcards", response_model=FlashcardResponse)
 def generate_flashcards(request: FlashcardRequest):
-    """Generate educational flashcards. Requires session_id from /api/explain. Uses session topics automatically."""
-    # Require session_id
     session_id = request.session_id
     if not session_id:
         raise HTTPException(
@@ -237,15 +267,12 @@ def generate_flashcards(request: FlashcardRequest):
         )
     
     if not session_manager.session_exists(session_id):
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-    
-    # If new topic provided, append it to session
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")    
     if request.topic and request.topic.lower() != "string":
         refined_new_topic = langchain_handler.refine_user_input(request.topic)
         session_manager.set_topic(session_id, refined_new_topic, session_manager.get_levels(session_id))
         primary_topic = refined_new_topic
     else:
-        # Use session topic
         primary_topic = session_manager.get_topic(session_id)
         if not primary_topic:
             raise HTTPException(
@@ -253,18 +280,13 @@ def generate_flashcards(request: FlashcardRequest):
                 detail="No topic found in session. Please call /api/explain first to set a topic."
             )
     
-    # Get all topics for context
-    all_topics = session_manager.get_all_topics(session_id)
-    
-    # Get levels from session (or use provided levels as override)
+    all_topics = session_manager.get_all_topics(session_id)    
     levels = request.levels if (request.levels and request.levels.lower() != "string") else session_manager.get_levels(session_id)
     
     session_manager.save_context(
         session_id, 
         f"Generating {request.count} flashcards about: {primary_topic}\nAll topics: {', '.join(all_topics)}\nLevels: {levels}"
-    )
-    
-    # Generate flashcards focusing on primary topic but aware of all topics
+    )    
     flashcard_data = langchain_handler.generate_flashcards(
         primary_topic, 
         request.count or 5,
@@ -291,12 +313,6 @@ def generate_flashcards(request: FlashcardRequest):
 
 @app.post("/api/quiz", response_model=QuizResponse)
 def generate_quiz(request: QuizRequest):
-    """
-    Generate quiz questions with priority-based topic selection.
-    Requires session_id from /api/explain.
-    Can add new topic - quiz will prioritize new topic while including questions from previous topics.
-    """
-    # Require session_id
     session_id = request.session_id
     if not session_id:
         raise HTTPException(
@@ -306,14 +322,11 @@ def generate_quiz(request: QuizRequest):
     
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-    
-    # If new topic provided, append it to session
     if request.topic and request.topic.lower() != "string":
         refined_new_topic = langchain_handler.refine_user_input(request.topic)
         session_manager.set_topic(session_id, refined_new_topic, session_manager.get_levels(session_id))
         primary_topic = refined_new_topic
     else:
-        # Use most recent session topic
         primary_topic = session_manager.get_topic(session_id)
         if not primary_topic:
             raise HTTPException(
@@ -321,16 +334,9 @@ def generate_quiz(request: QuizRequest):
                 detail="No topic found in session. Please call /api/explain first to set a topic."
             )
     
-    # Get all topics for context-aware generation
-    all_topics = session_manager.get_all_topics(session_id)
-    
-    # Get levels (content complexity) from session or request
-    levels = request.levels if (request.levels and request.levels.lower() != "string") else session_manager.get_levels(session_id)
-    
-    # Get quiz difficulty (question difficulty: easy, medium, hard)
-    quiz_difficulty = request.quiz_difficulty or "medium"
-    
-    # Save input
+    all_topics = session_manager.get_all_topics(session_id)    
+    levels = request.levels if (request.levels and request.levels.lower() != "string") else session_manager.get_levels(session_id)    
+    quiz_difficulty = request.quiz_difficulty or "medium"    
     session_manager.save_context(
         session_id, 
         f"Generating {request.num_questions} quiz questions\n"
@@ -338,18 +344,14 @@ def generate_quiz(request: QuizRequest):
         f"All topics: {', '.join(all_topics)}\n"
         f"Content level: {levels}\n"
         f"Quiz difficulty: {quiz_difficulty}"
-    )
-    
-    # Generate quiz using LangChain with priority-based topic selection
+    )    
     quiz_data = langchain_handler.generate_quiz(
         primary_topic, 
         request.num_questions or 5,
         levels,
         quiz_difficulty=quiz_difficulty,
         all_topics=all_topics if len(all_topics) > 1 else None
-    )
-    
-    # Convert to QuizQuestion objects
+    )    
     questions = [
         QuizQuestion(
             question=q.get("question", ""),
@@ -358,9 +360,7 @@ def generate_quiz(request: QuizRequest):
             explanation=q.get("explanation", "")
         )
         for q in quiz_data
-    ]
-    
-    # Save history
+    ]    
     session_manager.save_history(
         session_id,
         f"Generate quiz for: {primary_topic} ({quiz_difficulty} difficulty)",
@@ -376,8 +376,6 @@ def generate_quiz(request: QuizRequest):
 
 @app.post("/api/demo", response_model=DemoResponse)
 def generate_demo(request: DemoRequest):
-    """Generate code demonstration. Requires session_id from /api/explain. Uses session topic automatically."""
-    # Require session_id
     session_id = request.session_id
     if not session_id:
         raise HTTPException(
@@ -387,26 +385,17 @@ def generate_demo(request: DemoRequest):
     
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-    
-    # Get concept from session (or use provided concept as override)
-    # Ignore placeholder values like "string"
     concept = request.concept if (request.concept and request.concept.lower() != "string") else session_manager.get_topic(session_id)
     if not concept:
         raise HTTPException(
             status_code=400, 
             detail="No topic found in session. Please call /api/explain first to set a topic."
         )
-    
-    # Refine concept
     refined_concept = langchain_handler.refine_user_input(concept)
-    
-    # Save input
     session_manager.save_context(
         session_id, 
         f"Generating code demo for: {refined_concept}"
     )
-    
-    # Generate demo using LangChain
     demo_data = langchain_handler.generate_demo(refined_concept)
     
     # Save history
@@ -428,7 +417,6 @@ def generate_demo(request: DemoRequest):
 @app.post("/api/flowchart", response_model=FlowchartResponse)
 def generate_flowchart(request: FlowchartRequest):
     """Generate flowchart/process diagram. Requires session_id from /api/explain. Uses session topic automatically."""
-    # Require session_id
     session_id = request.session_id
     if not session_id:
         raise HTTPException(
@@ -439,25 +427,16 @@ def generate_flowchart(request: FlowchartRequest):
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
-    # Get concept from session (or use provided concept as override)
-    # Ignore placeholder values like "string"
     concept = request.concept if (request.concept and request.concept.lower() != "string") else session_manager.get_topic(session_id)
     if not concept:
         raise HTTPException(
             status_code=400, 
             detail="No topic found in session. Please call /api/explain first to set a topic."
         )
-    
-    # Refine concept
+
     refined_concept = langchain_handler.refine_user_input(concept)
-    
-    # Save input
     session_manager.save_context(session_id, f"Generating flowchart for: {refined_concept}")
-    
-    # Generate flowchart using LangChain
     flowchart_data = langchain_handler.generate_flowchart(refined_concept)
-    
-    # Save history
     session_manager.save_history(
         session_id,
         f"Generate flowchart for: {refined_concept}",
@@ -474,8 +453,6 @@ def generate_flowchart(request: FlowchartRequest):
 
 @app.post("/api/thought-questions", response_model=ThoughtResponse)
 def generate_thought_questions(request: ThoughtRequest):
-    """Generate thought-provoking questions. Requires session_id from /api/explain. Uses session topic automatically."""
-    # Require session_id
     session_id = request.session_id
     if not session_id:
         raise HTTPException(
@@ -485,20 +462,13 @@ def generate_thought_questions(request: ThoughtRequest):
     
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-    
-    # Get topic from session (or use provided topic as override)
-    # Ignore placeholder values like "string"
     topic = request.topic if (request.topic and request.topic.lower() != "string") else session_manager.get_topic(session_id)
     if not topic:
         raise HTTPException(
             status_code=400, 
             detail="No topic found in session. Please call /api/explain first to set a topic."
         )
-    
-    # Refine topic
     refined_topic = langchain_handler.refine_user_input(topic)
-    
-    # Save input
     session_manager.save_context(
         session_id, 
         f"Generating {request.count} thought questions about: {refined_topic}"
@@ -708,63 +678,67 @@ def delete_session(session_id: str):
 async def upload_pdf(
     session_id: str, 
     file: UploadFile = File(...),
-    topic: Optional[str] = None,
-    parent_topic: Optional[str] = None
+    chunk_size: int = 2000,  # Larger chunks = faster processing
+    overlap: int = 100  # Less overlap = faster processing
 ):
     """
-    Upload a PDF file to a session and store in vector database.
+    Upload a PDF file to a session and store chunks in vector database.
+    OPTIMIZED: Uses larger chunks and less overlap for faster processing.
     
     Args:
         session_id: Session UUID
         file: PDF file to upload
-        topic: Topic name for vector DB (e.g., "Flask", "FastAPI")
-        parent_topic: Parent topic if this is a subtopic (e.g., "Flask" for "Flask Routing")
+        chunk_size: Maximum characters per chunk (default: 2000, optimized for speed)
+        overlap: Number of overlapping characters between chunks (default: 100, optimized for speed)
+    
+    Returns:
+        Dictionary with upload status, document ID, and chunk information
     """
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
     # Check file type
     filename = file.filename or "input.pdf"
-    if not filename.endswith('.pdf'):
+    if not filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
     # Read file content
     content = await file.read()
     
-    # Save PDF to session
+    # Save PDF to session directory
     pdf_path = session_manager.save_pdf_input(session_id, content, filename)
     
-    # Add to vector database if topic provided
-    topic_id = None
-    if topic:
-        try:
-            topic_id = vector_db.add_pdf_document(
-                pdf_path=pdf_path,
-                topic=topic,
-                parent_topic=parent_topic,
-                metadata={
-                    "session_id": session_id,
-                    "filename": filename
-                }
-            )
-        except Exception as e:
-            # PDF saved but vector DB storage failed
-            return {
-                "message": "PDF uploaded successfully but vector DB storage failed",
-                "session_id": session_id,
-                "filename": filename,
-                "saved_path": pdf_path,
-                "vector_db_error": str(e)
-            }
-    
-    return {
-        "message": "PDF uploaded and indexed successfully",
-        "session_id": session_id,
-        "filename": filename,
-        "saved_path": pdf_path,
-        "topic_id": topic_id,
-        "topic": topic
-    }
+    # Process PDF and store chunks in vector database
+    try:
+        result = vector_db.add_pdf_chunks(
+            pdf_path=pdf_path,
+            session_id=session_id,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            metadata={"original_filename": filename}
+        )
+        
+        return {
+            "message": "PDF uploaded and indexed successfully",
+            "session_id": session_id,
+            "filename": result["filename"],
+            "saved_path": pdf_path,
+            "document_id": result["document_id"],
+            "total_chunks": result["total_chunks"],
+            "total_pages": result["total_pages"],
+            "chunk_size": chunk_size,
+            "overlap": overlap
+        }
+        
+    except Exception as e:
+        # PDF saved but vector DB storage failed
+        return {
+            "message": "PDF uploaded successfully but vector DB indexing failed",
+            "session_id": session_id,
+            "filename": filename,
+            "saved_path": pdf_path,
+            "error": str(e)
+        }
 
 @app.get("/api/session/{session_id}/pdfs")
 def get_session_pdfs(session_id: str):

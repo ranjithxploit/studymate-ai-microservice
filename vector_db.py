@@ -7,7 +7,7 @@ Uses ChromaDB for efficient semantic search and retrieval
 import chromadb
 from chromadb.config import Settings
 import os
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime
 import json
 from pathlib import Path
@@ -15,29 +15,11 @@ import PyPDF2
 
 
 class VectorDB:
-    """
-    Manages vector database for storing and retrieving PDF content.
-    
-    Features:
-    - Hierarchical topic IDs (1 for Flask, 1.1 for Flask basics, 2 for FastAPI, 2.1 for FastAPI routing, etc.)
-    - PDF content extraction and storage
-    - Semantic search across stored documents
-    - Topic-based organization
-    """
-    
     def __init__(self, persist_directory: str = "vector_db"):
-        """
-        Initialize ChromaDB client with persistent storage.
-        
-        Args:
-            persist_directory: Directory to store vector database files
-        """
         self.persist_directory = persist_directory
         
-        # Create directory if it doesn't exist
-        os.makedirs(persist_directory, exist_ok=True)
-        
-        # Initialize ChromaDB client with persistent storage
+
+        os.makedirs(persist_directory, exist_ok=True)        
         self.client = chromadb.PersistentClient(
             path=persist_directory,
             settings=Settings(
@@ -46,7 +28,6 @@ class VectorDB:
             )
         )
         
-        # Get or create collection for PDF documents
         self.collection = self.client.get_or_create_collection(
             name="pdf_documents",
             metadata={"description": "PDF documents with hierarchical topic IDs"}
@@ -69,15 +50,6 @@ class VectorDB:
             json.dump(self.topics, f, indent=2)
     
     def extract_text_from_pdf(self, pdf_path: str) -> str:
-        """
-        Extract text content from PDF file.
-        
-        Args:
-            pdf_path: Path to PDF file
-            
-        Returns:
-            Extracted text content
-        """
         try:
             text = ""
             with open(pdf_path, 'rb') as file:
@@ -88,6 +60,72 @@ class VectorDB:
         except Exception as e:
             print(f"Error extracting PDF text: {e}")
             return ""
+    
+    def extract_text_with_pages(self, pdf_path: str) -> List[Dict[str, Any]]:
+        """
+        Extract text from PDF with page numbers.
+        
+        Args:
+            pdf_path: Path to PDF file
+            
+        Returns:
+            List of dictionaries with page number and text content
+        """
+        try:
+            pages_data = []
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page_num, page in enumerate(pdf_reader.pages, start=1):
+                    text = page.extract_text().strip()
+                    if text:  # Only add non-empty pages
+                        pages_data.append({
+                            "page_number": page_num,
+                            "text": text
+                        })
+            return pages_data
+        except Exception as e:
+            print(f"Error extracting PDF text: {e}")
+            return []
+    
+    def chunk_text(self, text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
+        """
+        Split text into overlapping chunks for better context preservation.
+        
+        Args:
+            text: Text to chunk
+            chunk_size: Maximum characters per chunk
+            overlap: Number of overlapping characters between chunks
+            
+        Returns:
+            List of text chunks
+        """
+        if not text:
+            return []
+        
+        chunks = []
+        start = 0
+        text_length = len(text)
+        
+        while start < text_length:
+            end = start + chunk_size
+            
+            # If this is not the last chunk, try to break at a sentence or word boundary
+            if end < text_length:
+                # Look for sentence boundaries (. ! ?)
+                for boundary in ['. ', '! ', '? ', '\n\n', '\n', ' ']:
+                    boundary_pos = text.rfind(boundary, start, end)
+                    if boundary_pos != -1:
+                        end = boundary_pos + len(boundary)
+                        break
+            
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            
+            # Move start position with overlap
+            start = end - overlap if end < text_length else end
+        
+        return chunks
     
     def get_or_create_topic_id(self, topic: str, parent_topic: Optional[str] = None) -> str:
         """
@@ -213,6 +251,133 @@ class VectorDB:
         print(f"✅ Added PDF to vector DB: {topic} (ID: {topic_id})")
         return topic_id
     
+    def add_pdf_chunks(
+        self,
+        pdf_path: str,
+        session_id: str,
+        chunk_size: int = 2000,  # Larger chunks = fewer chunks = faster
+        overlap: int = 100,  # Less overlap = faster
+        metadata: Optional[Dict] = None
+    ) -> Dict[str, Any]:
+        """
+        Add PDF document as chunks with page numbers and indices.
+        Designed for session-based PDF processing.
+        
+        Args:
+            pdf_path: Path to PDF file
+            session_id: Session ID to associate with this PDF
+            chunk_size: Maximum characters per chunk
+            overlap: Number of overlapping characters between chunks
+            metadata: Additional metadata
+            
+        Returns:
+            Dictionary with document ID, chunk count, and page count
+        """
+        print(f"🔄 Starting PDF processing for session {session_id}...")
+        
+        # Extract text with page numbers
+        pages_data = self.extract_text_with_pages(pdf_path)
+        
+        if not pages_data:
+            raise ValueError(f"Could not extract text from PDF: {pdf_path}")
+        
+        print(f"📄 Extracted {len(pages_data)} pages from PDF")
+        
+        # Generate unique document ID for this PDF
+        doc_id = f"session_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        filename = os.path.basename(pdf_path)
+        
+        chunks_added = 0
+        all_chunk_ids = []
+        
+        # Prepare batch data for all chunks
+        batch_documents = []
+        batch_metadatas = []
+        batch_ids = []
+        
+        print(f"🔨 Chunking text...")
+        
+        # Process each page - store full pages if they're small enough
+        for page_data in pages_data:
+            page_num = page_data["page_number"]
+            page_text = page_data["text"]
+            
+            # If page is small enough, store as single chunk
+            if len(page_text) <= chunk_size:
+                chunk_id = f"{doc_id}_page{page_num}_chunk0"
+                
+                chunk_metadata = {
+                    "session_id": session_id,
+                    "document_id": doc_id,
+                    "filename": filename,
+                    "pdf_path": pdf_path,
+                    "page_number": page_num,
+                    "chunk_index": 0,
+                    "total_chunks_in_page": 1,
+                    "added_at": datetime.now().isoformat(),
+                    "type": "pdf_chunk"
+                }
+                
+                if metadata:
+                    chunk_metadata.update(metadata)
+                
+                batch_documents.append(page_text)
+                batch_metadatas.append(chunk_metadata)
+                batch_ids.append(chunk_id)
+                chunks_added += 1
+                all_chunk_ids.append(chunk_id)
+            else:
+                # Only chunk if page is too large
+                chunks = self.chunk_text(page_text, chunk_size, overlap)
+                
+                # Prepare each chunk for batch insertion
+                for chunk_idx, chunk_text in enumerate(chunks):
+                    chunk_id = f"{doc_id}_page{page_num}_chunk{chunk_idx}"
+                    
+                    chunk_metadata = {
+                        "session_id": session_id,
+                        "document_id": doc_id,
+                        "filename": filename,
+                        "pdf_path": pdf_path,
+                        "page_number": page_num,
+                        "chunk_index": chunk_idx,
+                        "total_chunks_in_page": len(chunks),
+                        "added_at": datetime.now().isoformat(),
+                        "type": "pdf_chunk"
+                    }
+                    
+                    if metadata:
+                        chunk_metadata.update(metadata)
+                    
+                    # Add to batch
+                    batch_documents.append(chunk_text)
+                    batch_metadatas.append(chunk_metadata)
+                    batch_ids.append(chunk_id)
+                    
+                    chunks_added += 1
+                    all_chunk_ids.append(chunk_id)
+        
+        print(f"💾 Inserting {chunks_added} chunks into vector DB...")
+        
+        # Batch insert all chunks at once (MUCH faster!)
+        if batch_documents:
+            self.collection.add(
+                documents=batch_documents,
+                metadatas=batch_metadatas,
+                ids=batch_ids
+            )
+        
+        print(f"✅ Added {chunks_added} chunks from PDF to vector DB (Session: {session_id})")
+        
+        return {
+            "document_id": doc_id,
+            "filename": filename,
+            "total_chunks": chunks_added,
+            "total_pages": len(pages_data),
+            "chunk_ids": all_chunk_ids,
+            "session_id": session_id
+        }
+    
     def search_by_topic(self, topic: str, n_results: int = 5) -> List[Dict]:
         """
         Search documents by topic name.
@@ -280,6 +445,102 @@ class VectorDB:
         except Exception as e:
             print(f"Search error: {e}")
             return []
+    
+    def search_pdf_chunks(
+        self,
+        query: str,
+        session_id: str,
+        n_results: int = 5
+    ) -> List[Dict]:
+        """
+        Search PDF chunks for a specific session.
+        
+        Args:
+            query: Search query (user's question)
+            session_id: Session ID to filter by
+            n_results: Number of most relevant chunks to return
+            
+        Returns:
+            List of relevant chunks with metadata (page, chunk_index, text, relevance)
+        """
+        try:
+            # Search with session filter using correct ChromaDB syntax
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=n_results,
+                where={
+                    "$and": [
+                        {"session_id": {"$eq": session_id}},
+                        {"type": {"$eq": "pdf_chunk"}}
+                    ]
+                }
+            )
+            
+            formatted = self._format_results(results)
+            
+            # Add relevance score (1.0 - distance)
+            for item in formatted:
+                if item.get("distance") is not None:
+                    # ChromaDB uses cosine distance (0 = identical, 2 = opposite)
+                    # Convert to similarity score (1.0 = best, 0 = worst)
+                    item["relevance_score"] = max(0, 1.0 - (item["distance"] / 2.0))
+                else:
+                    item["relevance_score"] = 0.0
+            
+            return formatted
+            
+        except Exception as e:
+            print(f"PDF chunk search error: {e}")
+            return []
+    
+    def get_session_pdf_info(self, session_id: str) -> Optional[Dict]:
+        """
+        Get information about PDF(s) associated with a session.
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            Dictionary with PDF information or None if no PDF found
+        """
+        try:
+            # Use query instead of get for complex where clauses
+            results = self.collection.query(
+                query_texts=[""],  # Empty query, filtering by metadata only
+                where={"$and": [
+                    {"session_id": {"$eq": session_id}},
+                    {"type": {"$eq": "pdf_chunk"}}
+                ]},
+                n_results=1
+            )
+            
+            if results["ids"] and len(results["ids"][0]) > 0:
+                metadata = results["metadatas"][0][0]
+                
+                # Count total chunks for this session using query
+                all_chunks = self.collection.query(
+                    query_texts=[""],
+                    where={"$and": [
+                        {"session_id": {"$eq": session_id}},
+                        {"type": {"$eq": "pdf_chunk"}}
+                    ]},
+                    n_results=10000  # Large number to get all chunks
+                )
+                
+                return {
+                    "has_pdf": True,
+                    "document_id": metadata.get("document_id"),
+                    "filename": metadata.get("filename"),
+                    "pdf_path": metadata.get("pdf_path"),
+                    "total_chunks": len(all_chunks["ids"][0]) if all_chunks["ids"] and all_chunks["ids"][0] else 0,
+                    "added_at": metadata.get("added_at")
+                }
+            
+            return {"has_pdf": False}
+            
+        except Exception as e:
+            print(f"Error getting session PDF info: {e}")
+            return {"has_pdf": False}
     
     def get_all_topics(self) -> Dict:
         """
