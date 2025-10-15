@@ -1,7 +1,3 @@
-"""
-Session Management Module for AI Explainer Bot
-Handles UUID-based session tracking, context storage, and history management
-"""
 import os
 import uuid
 import json
@@ -10,35 +6,17 @@ from typing import Optional, Dict, List
 from pathlib import Path
 
 class SessionManager:
-    """Manages chat sessions with UUID tracking and file storage"""
-    
     def __init__(self, base_dir: str = "context"):
-        """
-        Initialize session manager
-        
-        Args:
-            base_dir: Base directory for storing session data
-        """
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(exist_ok=True)
     
     def create_session(self) -> str:
-        """
-        Create a new chat session with unique UUID
-        
-        Returns:
-            str: Session UUID
-        """
         session_id = str(uuid.uuid4())
         session_dir = self.base_dir / session_id
-        session_dir.mkdir(exist_ok=True)
-        
-        # Create initial files
+        session_dir.mkdir(exist_ok=True)        
         context_file = session_dir / "context.txt"
         history_file = session_dir / "history.txt"
-        metadata_file = session_dir / "metadata.json"
-        
-        # Initialize metadata
+        metadata_file = session_dir / "metadata.json"        
         metadata = {
             "session_id": session_id,
             "created_at": datetime.now().isoformat(),
@@ -48,47 +26,20 @@ class SessionManager:
         }
         
         with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, indent=2)
-        
-        # Initialize empty files
+            json.dump(metadata, f, indent=2)        
         context_file.touch()
         history_file.touch()
         
         return session_id
     
     def session_exists(self, session_id: str) -> bool:
-        """
-        Check if a session exists
-        
-        Args:
-            session_id: Session UUID
-            
-        Returns:
-            bool: True if session exists
-        """
         session_dir = self.base_dir / session_id
         return session_dir.exists() and session_dir.is_dir()
     
     def get_session_dir(self, session_id: str) -> Path:
-        """
-        Get session directory path
-        
-        Args:
-            session_id: Session UUID
-            
-        Returns:
-            Path: Session directory path
-        """
         return self.base_dir / session_id
     
     def save_context(self, session_id: str, context: str) -> None:
-        """
-        Save or append context to session
-        
-        Args:
-            session_id: Session UUID
-            context: Context text to save
-        """
         if not self.session_exists(session_id):
             raise ValueError(f"Session {session_id} does not exist")
         
@@ -130,12 +81,12 @@ class SessionManager:
     
     def save_pdf_input(self, session_id: str, pdf_content: bytes, filename: str) -> str:
         """
-        Save PDF input file
+        Save PDF input file with original filename
         
         Args:
             session_id: Session UUID
             pdf_content: PDF file content in bytes
-            filename: Original filename
+            filename: Original filename (will be sanitized)
             
         Returns:
             str: Path to saved PDF file
@@ -143,39 +94,43 @@ class SessionManager:
         if not self.session_exists(session_id):
             raise ValueError(f"Session {session_id} does not exist")
         
-        pdf_file = self.get_session_dir(session_id) / "input.pdf"
+        # Sanitize filename - remove path components, keep only filename
+        safe_filename = Path(filename).name
+        
+        # Ensure .pdf extension
+        if not safe_filename.lower().endswith('.pdf'):
+            safe_filename += '.pdf'
+        
+        # Save with original filename
+        pdf_file = self.get_session_dir(session_id) / safe_filename
         
         with open(pdf_file, 'wb') as f:
             f.write(pdf_content)
         
-        # Update metadata
+        # Update metadata - track multiple PDFs
         metadata = self._load_metadata(session_id)
+        
+        # Initialize pdf_files list if not exists
+        if "pdf_files" not in metadata:
+            metadata["pdf_files"] = []
+        
+        # Add this PDF to the list
+        metadata["pdf_files"].append({
+            "filename": safe_filename,
+            "uploaded_at": datetime.now().isoformat(),
+            "path": str(pdf_file)
+        })
+        
+        # Keep old fields for backward compatibility
         metadata["has_pdf_input"] = True
-        metadata["pdf_filename"] = filename
+        metadata["pdf_filename"] = safe_filename
         metadata["pdf_saved_at"] = datetime.now().isoformat()
+        
         self._save_metadata(session_id, metadata)
         
         return str(pdf_file)
     
-    def save_text_input(self, session_id: str, text_input: str, input_type: str = "text") -> None:
-        """
-        Save text or topic input
-        
-        Args:
-            session_id: Session UUID
-            text_input: Text or topic input
-            input_type: Type of input (text, topic, question)
-        """
-        if not self.session_exists(session_id):
-            raise ValueError(f"Session {session_id} does not exist")
-        
-        input_file = self.get_session_dir(session_id) / "input.txt"
-        
-        with open(input_file, 'a', encoding='utf-8') as f:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"\n[{timestamp}] ({input_type})\n{text_input}\n")
-        
-        self._update_metadata(session_id)
+
     
     def get_context(self, session_id: str) -> str:
         """
@@ -239,6 +194,22 @@ class SessionManager:
             raise ValueError(f"Session {session_id} does not exist")
         
         return self._load_metadata(session_id)
+    
+    def get_pdf_files(self, session_id: str) -> List[Dict]:
+        """
+        Get all PDF files in a session
+        
+        Args:
+            session_id: Session UUID
+            
+        Returns:
+            List[Dict]: List of PDF files with metadata
+        """
+        if not self.session_exists(session_id):
+            raise ValueError(f"Session {session_id} does not exist")
+        
+        metadata = self._load_metadata(session_id)
+        return metadata.get("pdf_files", [])
     
     def list_sessions(self) -> List[Dict]:
         """

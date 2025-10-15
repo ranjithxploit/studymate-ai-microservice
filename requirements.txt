@@ -5,3 +5,9 @@ python-dotenv
 pydantic
 requests
 python-multipart
+chromadb
+pypdf2
+langchain
+langchain-google-genai
+langchain-community
+langchain-core

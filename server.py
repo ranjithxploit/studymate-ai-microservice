@@ -6,25 +6,23 @@ from pydantic import BaseModel, Field
 import google.generativeai as genai
 import dotenv
 from session_manager import session_manager
+from vector_db import get_vector_db
+from langchain_handler import get_langchain_handler
 
-# Load environment variables
 dotenv.load_dotenv()
-
-# Configure Google Generative AI
 API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     raise RuntimeError("GEMINI_API_KEY not set. Set it in the environment or a .env file.")
 
 genai.configure(api_key=API_KEY)
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-
-# Initialize FastAPI
+vector_db = get_vector_db()
+langchain_handler = get_langchain_handler()
 app = FastAPI(
     title="AI Explainer Bot API",
     description="Educational AI API for explaining concepts, generating quizzes, flashcards, and more",
-    version="1.0.0"
+    version="2.0.0"
 )
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,7 +31,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic Models
 class ExplainRequest(BaseModel):
     question: str = Field(..., example="What is machine learning?")
     difficulty: Optional[str] = Field("beginner", example="beginner")
@@ -49,6 +46,7 @@ class ExplainResponse(BaseModel):
 class FlashcardRequest(BaseModel):
     topic: str = Field(..., example="Neural Networks")
     count: Optional[int] = Field(5, ge=1, le=20)
+    difficulty: Optional[str] = Field("intermediate", example="intermediate")
     session_id: Optional[str] = None
 
 class Flashcard(BaseModel):
@@ -63,7 +61,7 @@ class FlashcardResponse(BaseModel):
 class QuizRequest(BaseModel):
     topic: str = Field(..., example="Machine Learning Basics")
     num_questions: Optional[int] = Field(5, ge=1, le=20)
-    difficulty: Optional[str] = Field("medium", example="medium")
+    difficulty: Optional[str] = Field("intermediate", example="intermediate")
     session_id: Optional[str] = None
 
 class QuizQuestion(BaseModel):
@@ -119,7 +117,23 @@ class CodeExecutionResponse(BaseModel):
     execution_time: Optional[str]
     session_id: str
 
-# Session Management Models
+class ExampleCodeRequest(BaseModel):
+    topic: str = Field(..., example="File handling in Python")
+    difficulty: Optional[str] = Field("intermediate", example="intermediate")
+    language: Optional[str] = Field("python", example="python")
+    session_id: Optional[str] = None
+
+class ExampleCodeResponse(BaseModel):
+    topic: str
+    code: str
+    explanation: str
+    key_concepts: List[str]
+    best_practices: List[str]
+    usage_example: str
+    difficulty: str
+    language: str
+    session_id: str
+
 class SessionCreateResponse(BaseModel):
     session_id: str
     message: str
@@ -145,18 +159,8 @@ class SessionListResponse(BaseModel):
     sessions: List[dict]
     total_count: int
 
-# Helper function to call AI
-def call_ai(prompt: str) -> str:
-    try:
-        model = genai.GenerativeModel(MODEL_NAME)
-        response = model.generate_content(prompt)
-        return getattr(response, "text", None) or str(response)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI request failed: {str(e)}")
-
 @app.get("/")
 def read_root():
-    """Root endpoint with API information."""
     return {
         "message": "AI Explainer Bot API",
         "version": "1.0.0",
@@ -181,439 +185,245 @@ def explain_concept(request: ExplainRequest):
     """
     Explain an AI/ML concept in simple terms with examples.
     Automatically creates or uses existing session for tracking.
+    Uses LangChain for refined responses.
     """
     # Create or get session
     session_id = request.session_id
     if not session_id or not session_manager.session_exists(session_id):
         session_id = session_manager.create_session()
     
+    # Refine user input first
+    refined_question = langchain_handler.refine_user_input(request.question)
+    
     # Save input
-    session_manager.save_text_input(session_id, request.question, "question")
-    session_manager.save_context(session_id, f"Topic: {request.question}\nDifficulty: {request.difficulty}")
+    session_manager.save_context(
+        session_id, 
+        f"Topic: {refined_question}\nDifficulty: {request.difficulty}"
+    )
     
-    prompt = f"""You are an educational AI assistant. Explain the following concept in {request.difficulty} level terms.
-    
-Question: {request.question}
-
-Provide your response in this exact format:
-EXPLANATION: [Your clear, simple explanation here]
-EXAMPLE: [A real-world example that illustrates this concept]
-
-Keep it concise and easy to understand."""
-
-    response_text = call_ai(prompt)
-    
-    # Parse the response
-    explanation = ""
-    example = ""
-    
-    if "EXPLANATION:" in response_text and "EXAMPLE:" in response_text:
-        parts = response_text.split("EXAMPLE:")
-        explanation = parts[0].replace("EXPLANATION:", "").strip()
-        example = parts[1].strip()
-    else:
-        # Fallback if format isn't followed
-        lines = response_text.strip().split("\n")
-        explanation = response_text
-        example = "Example: Spam email filter uses ML to classify emails."
+    # Generate explanation using LangChain
+    result = langchain_handler.generate_explanation(refined_question, request.difficulty or "beginner")
     
     # Save history
     session_manager.save_history(
         session_id,
-        request.question,
-        f"Explanation: {explanation}\nExample: {example}",
+        refined_question,
+        f"Explanation: {result['explanation']}\nExample: {result['example']}",
         "explain"
     )
     
     return ExplainResponse(
-        question=request.question,
-        explanation=explanation,
-        example=example,
+        question=refined_question,
+        explanation=result["explanation"],
+        example=result["example"],
         difficulty=request.difficulty or "beginner",
         session_id=session_id
     )
 
 @app.post("/api/flashcards", response_model=FlashcardResponse)
 def generate_flashcards(request: FlashcardRequest):
-    """Generate educational flashcards. Tracks session automatically."""
-    # Create or get session
     session_id = request.session_id
     if not session_id or not session_manager.session_exists(session_id):
         session_id = session_manager.create_session()
+    refined_topic = langchain_handler.refine_user_input(request.topic)
+    difficulty = request.difficulty if request.difficulty else "intermediate"
+    session_manager.save_context(
+        session_id, 
+        f"Generating {request.count} flashcards about: {refined_topic}\nDifficulty: {difficulty}"
+    )
+    flashcard_data = langchain_handler.generate_flashcards(
+        refined_topic, 
+        request.count or 5,
+        difficulty
+    )
     
-    # Save input
-    session_manager.save_text_input(session_id, request.topic, "flashcard_topic")
-    session_manager.save_context(session_id, f"Generating {request.count} flashcards about: {request.topic}")
-    
-    prompt = f"""Create {request.count} educational flashcards about "{request.topic}".
-
-Format each flashcard as:
-CARD [number]:
-FRONT: [Question or term]
-BACK: [Answer or definition]
-
-Make them educational and helpful for learning."""
-
-    response_text = call_ai(prompt)
-    flashcards = []
-    cards = response_text.split("CARD")
-    
-    for card in cards[1:]:
-        if "FRONT:" in card and "BACK:" in card:
-            try:
-                front_back = card.split("BACK:")
-                front = front_back[0].split("FRONT:")[1].strip()
-                back = front_back[1].strip()
-                flashcards.append(Flashcard(front=front, back=back))
-            except:
-                continue
-    if not flashcards:
-        flashcards = [
-            Flashcard(
-                front=f"What is {request.topic}?",
-                back=response_text[:200]
-            )
-        ]
-    
-    # Save history
+    flashcards = [
+        Flashcard(front=card.get("front", ""), back=card.get("back", ""))
+        for card in flashcard_data
+    ]
     session_manager.save_history(
         session_id,
-        f"Generate flashcards for: {request.topic}",
+        f"Generate flashcards for: {refined_topic}",
         f"Generated {len(flashcards)} flashcards",
         "flashcards"
     )
     
-    return FlashcardResponse(topic=request.topic, flashcards=flashcards, session_id=session_id)
+    return FlashcardResponse(
+        topic=refined_topic, 
+        flashcards=flashcards, 
+        session_id=session_id
+    )
 
 @app.post("/api/quiz", response_model=QuizResponse)
 def generate_quiz(request: QuizRequest):
-    """Generate quiz questions. Tracks session automatically."""
+    """Generate quiz questions. Tracks session automatically. Uses LangChain.
+    Difficulty levels: beginner, intermediate, professional"""
     # Create or get session
     session_id = request.session_id
     if not session_id or not session_manager.session_exists(session_id):
         session_id = session_manager.create_session()
     
-    # Save input
-    session_manager.save_text_input(session_id, request.topic, "quiz_topic")
-    session_manager.save_context(session_id, f"Generating {request.num_questions} quiz questions about: {request.topic} (Difficulty: {request.difficulty})")
+    # Refine topic
+    refined_topic = langchain_handler.refine_user_input(request.topic)
+    difficulty = request.difficulty or "intermediate"
     
-    prompt = f"""Create a {request.difficulty} level quiz about "{request.topic}" with {request.num_questions} multiple choice questions.
-
-Format each question as:
-QUESTION [number]: [The question text]
-A) [Option A]
-B) [Option B]
-C) [Option C]
-D) [Option D]
-CORRECT: [A/B/C/D]
-EXPLANATION: [Why this is the correct answer]
-
-Make questions educational and clear."""
-
-    response_text = call_ai(prompt)
-    questions = []
-    question_blocks = response_text.split("QUESTION")[1:]
+    # Save input with difficulty
+    session_manager.save_context(
+        session_id, 
+        f"Generating {request.num_questions} quiz questions about: {refined_topic}\nDifficulty: {difficulty}"
+    )
     
-    for block in question_blocks:
-        try:
-            lines = block.strip().split("\n")
-            question_text = lines[0].split(":", 1)[1].strip() if ":" in lines[0] else lines[0].strip()
-            
-            options = []
-            correct_letter = ""
-            explanation = ""
-            
-            for line in lines[1:]:
-                line = line.strip()
-                if line.startswith(("A)", "B)", "C)", "D)")):
-                    options.append(line[3:].strip())
-                elif line.startswith("CORRECT:"):
-                    correct_letter = line.split(":")[1].strip()[0]
-                elif line.startswith("EXPLANATION:"):
-                    explanation = line.split(":", 1)[1].strip()
-            
-            if options and correct_letter:
-                correct_index = ord(correct_letter.upper()) - ord('A')
-                if 0 <= correct_index < len(options):
-                    questions.append(QuizQuestion(
-                        question=question_text,
-                        options=options,
-                        correct_answer=options[correct_index],
-                        explanation=explanation or "Correct!"
-                    ))
-        except:
-            continue
+    # Generate quiz using LangChain (returns a list directly)
+    quiz_data = langchain_handler.generate_quiz(
+        refined_topic, 
+        request.num_questions or 5,
+        difficulty
+    )
     
-    # Fallback
-    if not questions:
-        questions = [QuizQuestion(
-            question=f"What is {request.topic}?",
-            options=["Option A", "Option B", "Option C", "Option D"],
-            correct_answer="Option A",
-            explanation="This is a sample question."
-        )]
+    # Convert to QuizQuestion objects
+    questions = [
+        QuizQuestion(
+            question=q.get("question", ""),
+            options=q.get("options", []),
+            correct_answer=q.get("correct_answer", ""),
+            explanation=q.get("explanation", "")
+        )
+        for q in quiz_data
+    ]
     
     # Save history
     session_manager.save_history(
         session_id,
-        f"Generate quiz for: {request.topic}",
+        f"Generate quiz for: {refined_topic}",
         f"Generated {len(questions)} quiz questions",
         "quiz"
     )
     
-    return QuizResponse(topic=request.topic, questions=questions, session_id=session_id)
+    return QuizResponse(
+        topic=refined_topic, 
+        questions=questions, 
+        session_id=session_id
+    )
 
 @app.post("/api/demo", response_model=DemoResponse)
 def generate_demo(request: DemoRequest):
-    """Generate code demonstration. Tracks session automatically."""
+    """Generate code demonstration. Tracks session automatically. Uses LangChain."""
     # Create or get session
     session_id = request.session_id
     if not session_id or not session_manager.session_exists(session_id):
         session_id = session_manager.create_session()
     
+    # Refine concept
+    refined_concept = langchain_handler.refine_user_input(request.concept)
+    
     # Save input
-    session_manager.save_text_input(session_id, request.concept, "demo_concept")
-    session_manager.save_context(session_id, f"Generating code demo for: {request.concept}")
+    session_manager.save_context(session_id, f"Generating code demo for: {refined_concept}")
     
-    prompt = f"""Create a simple Python code demonstration for "{request.concept}".
-
-Provide:
-1. Working Python code (well-commented)
-2. Explanation of what the code does
-3. Example output
-
-Format:
-CODE:
-```python
-[your code here]
-```
-
-EXPLANATION:
-[explanation here]
-
-OUTPUT:
-[example output]"""
-
-    response_text = call_ai(prompt)
-    
-    # Parse response
-    code = ""
-    explanation = ""
-    output = ""
-    
-    if "```python" in response_text:
-        code_parts = response_text.split("```python")
-        if len(code_parts) > 1:
-            code = code_parts[1].split("```")[0].strip()
-    
-    if "EXPLANATION:" in response_text:
-        expl_parts = response_text.split("EXPLANATION:")
-        if len(expl_parts) > 1:
-            explanation = expl_parts[1].split("OUTPUT:")[0].strip() if "OUTPUT:" in expl_parts[1] else expl_parts[1].strip()
-    
-    if "OUTPUT:" in response_text:
-        output = response_text.split("OUTPUT:")[1].strip()
-    
-    # Fallbacks
-    if not code:
-        code = f"# Demo code for {request.concept}\nprint('Hello World')"
-    if not explanation:
-        explanation = f"This demonstrates {request.concept}"
-    if not output:
-        output = "Sample output"
+    # Generate demo using LangChain
+    demo_data = langchain_handler.generate_demo(refined_concept)
     
     # Save history
     session_manager.save_history(
         session_id,
-        f"Generate demo for: {request.concept}",
+        f"Generate demo for: {refined_concept}",
         f"Code demo generated",
         "demo"
     )
     
     return DemoResponse(
-        concept=request.concept,
-        demo_code=code,
-        explanation=explanation,
-        output_example=output,
+        concept=refined_concept,
+        demo_code=demo_data["code"],
+        explanation=demo_data["explanation"],
+        output_example=demo_data["output"],
         session_id=session_id
     )
 
 @app.post("/api/flowchart", response_model=FlowchartResponse)
 def generate_flowchart(request: FlowchartRequest):
-    """Generate flowchart/process diagram. Tracks session automatically."""
+    """Generate flowchart/process diagram. Tracks session automatically. Uses LangChain."""
     # Create or get session
     session_id = request.session_id
     if not session_id or not session_manager.session_exists(session_id):
         session_id = session_manager.create_session()
     
+    # Refine concept
+    refined_concept = langchain_handler.refine_user_input(request.concept)
+    
     # Save input
-    session_manager.save_text_input(session_id, request.concept, "flowchart_concept")
-    session_manager.save_context(session_id, f"Generating flowchart for: {request.concept}")
+    session_manager.save_context(session_id, f"Generating flowchart for: {refined_concept}")
     
-    prompt = f"""Create a step-by-step process flowchart for "{request.concept}".
-
-Provide:
-1. Numbered steps (clear and concise)
-2. Mermaid.js flowchart code
-
-Format:
-STEPS:
-1. [Step 1]
-2. [Step 2]
-...
-
-MERMAID:
-```mermaid
-[mermaid flowchart code]
-```"""
-
-    response_text = call_ai(prompt)
-    
-    # Parse steps
-    steps = []
-    mermaid_code = ""
-    
-    if "STEPS:" in response_text:
-        steps_section = response_text.split("STEPS:")[1]
-        if "MERMAID:" in steps_section:
-            steps_section = steps_section.split("MERMAID:")[0]
-        
-        for line in steps_section.split("\n"):
-            line = line.strip()
-            if line and (line[0].isdigit() or line.startswith("-")):
-                steps.append(line)
-    
-    if "```mermaid" in response_text:
-        mermaid_parts = response_text.split("```mermaid")
-        if len(mermaid_parts) > 1:
-            mermaid_code = mermaid_parts[1].split("```")[0].strip()
-    
-    # Fallbacks
-    if not steps:
-        steps = [
-            f"1. Understand {request.concept}",
-            "2. Apply the concept",
-            "3. Evaluate results"
-        ]
-    
-    if not mermaid_code:
-        mermaid_code = "graph TD\n    A[Start] --> B[Process]\n    B --> C[End]"
+    # Generate flowchart using LangChain
+    flowchart_data = langchain_handler.generate_flowchart(refined_concept)
     
     # Save history
     session_manager.save_history(
         session_id,
-        f"Generate flowchart for: {request.concept}",
-        f"Flowchart generated with {len(steps)} steps",
+        f"Generate flowchart for: {refined_concept}",
+        f"Flowchart generated with {len(flowchart_data['steps'])} steps",
         "flowchart"
     )
     
     return FlowchartResponse(
-        concept=request.concept,
-        steps=steps,
-        mermaid_code=mermaid_code,
+        concept=refined_concept,
+        steps=flowchart_data["steps"],
+        mermaid_code=flowchart_data["mermaid_code"],
         session_id=session_id
     )
 
 @app.post("/api/thought-questions", response_model=ThoughtResponse)
 def generate_thought_questions(request: ThoughtRequest):
-    """Generate thought-provoking questions. Tracks session automatically."""
+    """Generate thought-provoking questions. Tracks session automatically. Uses LangChain."""
     # Create or get session
     session_id = request.session_id
     if not session_id or not session_manager.session_exists(session_id):
         session_id = session_manager.create_session()
     
+    # Refine topic
+    refined_topic = langchain_handler.refine_user_input(request.topic)
+    
     # Save input
-    session_manager.save_text_input(session_id, request.topic, "thought_topic")
-    session_manager.save_context(session_id, f"Generating {request.count} thought questions about: {request.topic}")
+    session_manager.save_context(
+        session_id, 
+        f"Generating {request.count} thought questions about: {refined_topic}"
+    )
     
-    prompt = f"""Generate {request.count} thought-provoking questions about "{request.topic}".
-
-These should be deep, open-ended questions that encourage critical thinking and discussion.
-
-Format as a numbered list:
-1. [Question 1]
-2. [Question 2]
-..."""
-
-    response_text = call_ai(prompt)
-    
-    # Parse questions
-    questions = []
-    for line in response_text.split("\n"):
-        line = line.strip()
-        if line and (line[0].isdigit() or line.startswith("-")):
-            # Remove numbering
-            question = line.split(".", 1)[1].strip() if "." in line else line.strip("- ")
-            if question:
-                questions.append(question)
-    
-    # Fallback
-    if not questions:
-        questions = [f"How does {request.topic} impact our daily lives?"]
+    # Generate thought questions using LangChain
+    questions = langchain_handler.generate_thought_questions(refined_topic, request.count or 3)
     
     # Save history
     session_manager.save_history(
         session_id,
-        f"Generate thought questions for: {request.topic}",
+        f"Generate thought questions for: {refined_topic}",
         f"Generated {len(questions)} thought-provoking questions",
         "thought_questions"
     )
     
-    return ThoughtResponse(topic=request.topic, questions=questions, session_id=session_id)
+    return ThoughtResponse(
+        topic=refined_topic, 
+        questions=questions, 
+        session_id=session_id
+    )
 
 @app.post("/api/execute-code", response_model=CodeExecutionResponse)
 def execute_code(request: CodeExecutionRequest):
-    """Analyze/execute code (simulated). Tracks session automatically."""
+    """Analyze/execute code (simulated). Tracks session automatically. Uses LangChain."""
     # Create or get session
     session_id = request.session_id
     if not session_id or not session_manager.session_exists(session_id):
         session_id = session_manager.create_session()
     
     # Save input
-    session_manager.save_text_input(session_id, request.code, "code_execution")
     session_manager.save_context(session_id, f"Analyzing {request.language} code execution")
     
     # NOTE: For security reasons, we don't actually execute arbitrary code
-    # Instead, we use AI to simulate/explain what the code would do
+    # Instead, we use AI to analyze what the code would do
     
-    prompt = f"""Analyze this Python code and tell me what it would output:
-
-```python
-{request.code}
-```
-
-Provide:
-1. The expected output
-2. Any errors if the code has issues
-3. Brief explanation
-
-Format:
-OUTPUT: [what the code outputs]
-ERROR: [any errors, or "None"]
-EXPLANATION: [brief explanation]"""
-
-    response_text = call_ai(prompt)
+    # Analyze code using LangChain
+    analysis = langchain_handler.analyze_code(request.code, request.language or "python")
     
-    # Parse response
-    output = ""
-    error = None
-    
-    if "OUTPUT:" in response_text:
-        output_section = response_text.split("OUTPUT:")[1]
-        if "ERROR:" in output_section:
-            output = output_section.split("ERROR:")[0].strip()
-        else:
-            output = output_section.strip()
-    
-    if "ERROR:" in response_text:
-        error_section = response_text.split("ERROR:")[1]
-        if "EXPLANATION:" in error_section:
-            error_text = error_section.split("EXPLANATION:")[0].strip()
-        else:
-            error_text = error_section.strip()
-        
-        if error_text and error_text.lower() != "none":
-            error = error_text
+    # Extract output/error from analysis
+    output = analysis.get("output", "Code analysis completed")
+    error = analysis.get("error")
     
     # Save history
     session_manager.save_history(
@@ -624,9 +434,59 @@ EXPLANATION: [brief explanation]"""
     )
     
     return CodeExecutionResponse(
-        output=output or "Code analysis completed",
+        output=output,
         error=error,
         execution_time="simulated",
+        session_id=session_id
+    )
+
+@app.post("/api/example-code", response_model=ExampleCodeResponse)
+def generate_example_code(request: ExampleCodeRequest):
+    """
+    Generate professional, production-ready code examples.
+    Tracks session automatically. Uses LangChain.
+    Difficulty levels: beginner, intermediate, professional
+    """
+    # Create or get session
+    session_id = request.session_id
+    if not session_id or not session_manager.session_exists(session_id):
+        session_id = session_manager.create_session()
+    
+    # Refine topic
+    refined_topic = langchain_handler.refine_user_input(request.topic)
+    difficulty = request.difficulty or "intermediate"
+    language = request.language or "python"
+    
+    # Save input with difficulty level
+    session_manager.save_context(
+        session_id, 
+        f"Generating {language} code example for: {refined_topic}\nDifficulty: {difficulty}"
+    )
+    
+    # Generate code example using LangChain
+    code_result = langchain_handler.generate_example_code(
+        refined_topic, 
+        difficulty,
+        language
+    )
+    
+    # Save history
+    session_manager.save_history(
+        session_id,
+        f"Generate {language} code for: {refined_topic} ({difficulty})",
+        f"Code example generated with {len(code_result.get('best_practices', []))} best practices",
+        "example_code"
+    )
+    
+    return ExampleCodeResponse(
+        topic=refined_topic,
+        code=code_result.get("code", ""),
+        explanation=code_result.get("explanation", ""),
+        key_concepts=code_result.get("key_concepts", []),
+        best_practices=code_result.get("best_practices", []),
+        usage_example=code_result.get("usage_example", ""),
+        difficulty=difficulty,
+        language=language,
         session_id=session_id
     )
 
@@ -705,8 +565,21 @@ def delete_session(session_id: str):
         raise HTTPException(status_code=500, detail="Failed to delete session")
 
 @app.post("/api/session/{session_id}/upload-pdf")
-async def upload_pdf(session_id: str, file: UploadFile = File(...)):
-    """Upload a PDF file to a session."""
+async def upload_pdf(
+    session_id: str, 
+    file: UploadFile = File(...),
+    topic: Optional[str] = None,
+    parent_topic: Optional[str] = None
+):
+    """
+    Upload a PDF file to a session and store in vector database.
+    
+    Args:
+        session_id: Session UUID
+        file: PDF file to upload
+        topic: Topic name for vector DB (e.g., "Flask", "FastAPI")
+        parent_topic: Parent topic if this is a subtopic (e.g., "Flask" for "Flask Routing")
+    """
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
@@ -718,15 +591,143 @@ async def upload_pdf(session_id: str, file: UploadFile = File(...)):
     # Read file content
     content = await file.read()
     
-    # Save PDF
+    # Save PDF to session
     pdf_path = session_manager.save_pdf_input(session_id, content, filename)
     
+    # Add to vector database if topic provided
+    topic_id = None
+    if topic:
+        try:
+            topic_id = vector_db.add_pdf_document(
+                pdf_path=pdf_path,
+                topic=topic,
+                parent_topic=parent_topic,
+                metadata={
+                    "session_id": session_id,
+                    "filename": filename
+                }
+            )
+        except Exception as e:
+            # PDF saved but vector DB storage failed
+            return {
+                "message": "PDF uploaded successfully but vector DB storage failed",
+                "session_id": session_id,
+                "filename": filename,
+                "saved_path": pdf_path,
+                "vector_db_error": str(e)
+            }
+    
     return {
-        "message": "PDF uploaded successfully",
+        "message": "PDF uploaded and indexed successfully",
         "session_id": session_id,
         "filename": filename,
-        "saved_path": pdf_path
+        "saved_path": pdf_path,
+        "topic_id": topic_id,
+        "topic": topic
     }
+
+@app.get("/api/session/{session_id}/pdfs")
+def get_session_pdfs(session_id: str):
+    """Get all PDF files in a session."""
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    
+    pdf_files = session_manager.get_pdf_files(session_id)
+    
+    return {
+        "session_id": session_id,
+        "pdf_count": len(pdf_files),
+        "pdf_files": pdf_files
+    }
+
+# ===========================
+# Vector DB Endpoints
+# ===========================
+
+@app.get("/api/vectordb/topics")
+def get_vector_db_topics():
+    """Get all topics with hierarchical IDs from vector database."""
+    try:
+        topics = vector_db.get_all_topics()
+        hierarchy = vector_db.get_topic_hierarchy()
+        doc_count = vector_db.get_document_count()
+        
+        return {
+            "total_documents": doc_count,
+            "topics": topics,
+            "hierarchy": hierarchy
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/vectordb/search")
+def search_vector_db(query: str, n_results: int = 5):
+    """
+    Semantic search across all PDF documents.
+    
+    Args:
+        query: Search query (e.g., "tell me about Flask routing")
+        n_results: Number of results to return (default: 5)
+    """
+    try:
+        results = vector_db.semantic_search(query, n_results)
+        
+        return {
+            "query": query,
+            "result_count": len(results),
+            "results": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/vectordb/topic/{topic_id}")
+def get_documents_by_topic_id(topic_id: str, n_results: int = 10):
+    """
+    Get all documents for a specific topic ID.
+    
+    Args:
+        topic_id: Hierarchical topic ID (e.g., "1", "1.1", "2")
+        n_results: Maximum results to return
+    """
+    try:
+        results = vector_db.search_by_topic_id(topic_id, n_results)
+        
+        return {
+            "topic_id": topic_id,
+            "result_count": len(results),
+            "documents": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/vectordb/topic/{topic_id}")
+def delete_topic_documents(topic_id: str):
+    """Delete all documents with a specific topic ID."""
+    try:
+        vector_db.delete_by_topic_id(topic_id)
+        return {"message": f"Deleted all documents with topic ID: {topic_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/vectordb/stats")
+def get_vector_db_stats():
+    """Get vector database statistics."""
+    try:
+        topics = vector_db.get_all_topics()
+        doc_count = vector_db.get_document_count()
+        
+        main_topics = [t for t in topics.values() if t.get("parent") is None]
+        subtopics = [t for t in topics.values() if t.get("parent") is not None]
+        
+        return {
+            "total_documents": doc_count,
+            "total_topics": len(topics),
+            "main_topics": len(main_topics),
+            "subtopics": len(subtopics),
+            "topics_list": list(topics.values())
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Additional endpoints for future features
 @app.get("/api/topics")
