@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StudyMate AI - Your Learning Assistant</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                        <rect width="32" height="32" rx="8" fill="url(#gradient)"/>
+                        <path d="M16 8L20 12L16 16L12 12L16 8Z" fill="white"/>
+                        <path d="M16 16L20 20L16 24L12 20L16 16Z" fill="white" opacity="0.7"/>
+                        <defs>
+                            <linearGradient id="gradient" x1="0" y1="0" x2="32" y2="32">
+                                <stop offset="0%" stop-color="#667eea"/>
+                                <stop offset="100%" stop-color="#764ba2"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                    <span class="logo-text">StudyMate AI</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-feature="explain">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10 2C5.58 2 2 5.58 2 10s3.58 8 8 8 8-3.58 8-8-3.58-8-8-8zm1 13H9v-2h2v2zm0-4H9V5h2v6z"/>
+                    </svg>
+                    <span>Explain</span>
+                </button>
+
+                <button class="nav-item" data-feature="flashcards">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M4 4h12v2H4V4zm0 4h12v2H4V8zm0 4h8v2H4v-2z"/>
+                    </svg>
+                    <span>Flashcards</span>
+                </button>
+
+                <button class="nav-item" data-feature="quiz">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                    </svg>
+                    <span>Quiz</span>
+                </button>
+
+                <button class="nav-item" data-feature="flowchart">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M2 4h6v6H2V4zm10 0h6v6h-6V4zM2 12h6v6H2v-6zm10 0h6v6h-6v-6z"/>
+                    </svg>
+                    <span>Flowchart</span>
+                </button>
+
+                <button class="nav-item" data-feature="debug">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M15.5 3.5L14 5l1.5 1.5L17 5l-1.5-1.5zM10 5L8.5 6.5 10 8l1.5-1.5L10 5zm-5 0L3.5 6.5 5 8l1.5-1.5L5 5zm10 5l-1.5 1.5L15 13l1.5-1.5L15 10zm-5 0l-1.5 1.5L10 13l1.5-1.5L10 10zm-5 0L3.5 11.5 5 13l1.5-1.5L5 10zm10 5l-1.5 1.5L15 18l1.5-1.5L15 15z"/>
+                    </svg>
+                    <span>Debug Code</span>
+                </button>
+
+                <button class="nav-item" data-feature="pdf">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 16c0 1.1.89 2 1.99 2H14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4 14H8v-2h2v2zm0-4H8V6h2v6z"/>
+                    </svg>
+                    <span>Upload PDF</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="session-info">
+                    <div class="session-label">Session ID:</div>
+                    <div class="session-id" id="sessionId">Not started</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-content">
+                    <h1 class="feature-title" id="featureTitle">Explain Concepts</h1>
+                    <button class="new-session-btn" id="newSessionBtn">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                        New Session
+                    </button>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <div class="content-area" id="contentArea">
+                <!-- Explain Feature -->
+                <div class="feature-panel active" id="explainPanel">
+                    <div class="welcome-message">
+                        <h2>👋 Welcome to StudyMate AI</h2>
+                        <p>Ask me anything and I'll explain it at your level!</p>
+                    </div>
+
+                    <div class="input-section">
+                        <div class="input-wrapper">
+                            <textarea 
+                                class="main-input" 
+                                id="explainInput" 
+                                placeholder="What would you like to learn about?"
+                                rows="3"
+                            ></textarea>
+                            <div class="input-controls">
+                                <select class="level-select" id="levelSelect">
+                                    <option value="beginner">🌱 Beginner</option>
+                                    <option value="university">🎓 University</option>
+                                    <option value="researcher">🔬 Researcher</option>
+                                </select>
+                                <button class="send-btn" id="explainBtn">
+                                    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M2 3l16 7-16 7V3zm2 11l8-4-8-4v8z"/>
+                                    </svg>
+                                    Explain
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="response-area" id="explainResponse"></div>
+                </div>
+
+                <!-- Flashcards Feature -->
+                <div class="feature-panel" id="flashcardsPanel">
+                    <div class="input-section">
+                        <div class="input-wrapper">
+                            <input 
+                                type="text" 
+                                class="topic-input" 
+                                id="flashcardTopic" 
+                                placeholder="Enter topic for flashcards..."
+                            >
+                            <div class="input-controls">
+                                <input 
+                                    type="number" 
+                                    class="count-input" 
+                                    id="flashcardCount" 
+                                    min="1" 
+                                    max="10" 
+                                    value="5"
+                                    placeholder="Count"
+                                >
+                                <button class="send-btn" id="flashcardBtn">
+                                    Generate Flashcards
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="response-area" id="flashcardResponse"></div>
+                </div>
+
+                <!-- Quiz Feature -->
+                <div class="feature-panel" id="quizPanel">
+                    <div class="input-section">
+                        <div class="input-wrapper">
+                            <input 
+                                type="text" 
+                                class="topic-input" 
+                                id="quizTopic" 
+                                placeholder="Enter topic for quiz..."
+                            >
+                            <div class="input-controls">
+                                <input 
+                                    type="number" 
+                                    class="count-input" 
+                                    id="quizCount" 
+                                    min="1" 
+                                    max="10" 
+                                    value="5"
+                                    placeholder="Questions"
+                                >
+                                <button class="send-btn" id="quizBtn">
+                                    Generate Quiz
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="response-area" id="quizResponse"></div>
+                </div>
+
+                <!-- Flowchart Feature -->
+                <div class="feature-panel" id="flowchartPanel">
+                    <div class="input-section">
+                        <div class="input-wrapper">
+                            <input 
+                                type="text" 
+                                class="topic-input" 
+                                id="flowchartTopic" 
+                                placeholder="Enter concept for flowchart..."
+                            >
+                            <button class="send-btn" id="flowchartBtn">
+                                Generate Flowchart
+                            </button>
+                        </div>
+                    </div>
+                    <div class="response-area" id="flowchartResponse"></div>
+                </div>
+
+                <!-- Debug Feature -->
+                <div class="feature-panel" id="debugPanel">
+                    <div class="input-section">
+                        <div class="code-input-wrapper">
+                            <textarea 
+                                class="code-input" 
+                                id="debugCode" 
+                                placeholder="Paste your Python code here..."
+                                rows="10"
+                            ></textarea>
+                            <button class="send-btn" id="debugBtn">
+                                🐛 Debug & Run Code
+                            </button>
+                        </div>
+                    </div>
+                    <div class="response-area" id="debugResponse"></div>
+                </div>
+
+                <!-- PDF Upload Feature -->
+                <div class="feature-panel" id="pdfPanel">
+                    <div class="upload-section">
+                        <div class="upload-area" id="uploadArea">
+                            <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+                                <path d="M32 16v32M16 32h32" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+                            </svg>
+                            <h3>Upload PDF Document</h3>
+                            <p>Drag and drop or click to browse</p>
+                            <input type="file" id="pdfInput" accept=".pdf" style="display: none;">
+                            <button class="upload-btn" id="uploadBtn">Choose File</button>
+                        </div>
+                        <div class="upload-progress" id="uploadProgress" style="display: none;">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progressFill"></div>
+                            </div>
+                            <div class="progress-text" id="progressText">Uploading...</div>
+                        </div>
+                    </div>
+                    <div class="response-area" id="pdfResponse"></div>
+                </div>
+            </div>
+
+            <!-- Loading Overlay -->
+            <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+                <div class="loader">
+                    <div class="loader-ring"></div>
+                    <div class="loader-text">Thinking...</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

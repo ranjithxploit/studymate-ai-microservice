@@ -47,6 +47,8 @@ print(numbers[0])  # This works
 print(numbers[10]) # This will cause an error
 """
 
+
+
 response = requests.post(
     f"{BASE_URL}/api/debug-code",
     json={

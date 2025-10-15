@@ -2,6 +2,8 @@ import os
 from typing import Optional, List
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 import google.generativeai as genai
 import dotenv
@@ -31,15 +33,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 class ExplainRequest(BaseModel):
     question: str = Field(..., example="What is machine learning?")
     levels: Optional[str] = Field("beginner", example="beginner")
     session_id: Optional[str] = None
 
 class PdfChunk(BaseModel):
-    """Represents a relevant PDF chunk with metadata."""
     chunk_text: str
-    page_number: int
+    page_number: int #chunk with metadata
     chunk_index: int
     relevance_score: float
     filename: str
@@ -180,19 +184,25 @@ class DebugCodeResponse(BaseModel):
     error_logs: Optional[str]
     error_type: Optional[str]
     stack_trace: Optional[str]
-    exit_code: int  # 0 for success, 1 for failure
-    runtime_duration: str  # in seconds
-    memory_usage: str  # in MB
+    exit_code: int
+    runtime_duration: str
+    memory_usage: str
     syntax_errors: List[str]
-    ai_analysis: str  # AI analysis of the code and errors
-    suggestions: List[str]  # AI suggestions for fixing
+    ai_analysis: str
+    suggestions: List[str]
     session_id: str
 
 @app.get("/")
 def read_root():
+    """Serve the web interface"""
+    return FileResponse("static/index.html")
+
+@app.get("/api")
+def api_info():
+    """API information endpoint"""
     return {
-        "message": "AI Explainer Bot API",
-        "version": "1.0.0",
+        "message": "StudyMate AI API",
+        "version": "2.0.0",
         "endpoints": {
             "explain": "/api/explain",
             "flashcards": "/api/flashcards",
@@ -207,7 +217,6 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    """Health check endpoint."""
     return {"status": "healthy", "model": MODEL_NAME}
 
 @app.post("/api/explain", response_model=ExplainResponse)
@@ -219,13 +228,11 @@ def explain_concept(request: ExplainRequest):
     levels = request.levels or "beginner"    
     session_manager.set_topic(session_id, refined_question, levels)
     
-    # Check if session has PDF and search for relevant chunks
     pdf_chunks = None
     pdf_context = ""
     pdf_info = vector_db.get_session_pdf_info(session_id)
     
     if pdf_info and pdf_info.get("has_pdf", False):
-        # Search PDF chunks relevant to the question
         search_results = vector_db.search_pdf_chunks(
             query=refined_question,
             session_id=session_id,
@@ -244,7 +251,6 @@ def explain_concept(request: ExplainRequest):
                 for chunk in search_results
             ]
             
-            # Create context from PDF chunks for the AI
             pdf_context = "\n\nRelevant information from uploaded PDF:\n"
             for chunk in pdf_chunks:
                 pdf_context += f"\n[Page {chunk.page_number}]: {chunk.chunk_text[:500]}...\n"
@@ -254,7 +260,6 @@ def explain_concept(request: ExplainRequest):
         f"Topic: {refined_question}\nLevels: {levels}\nHas PDF: {pdf_info.get('has_pdf', False) if pdf_info else False}"
     )
     
-    # Generate explanation (with PDF context if available)
     result = langchain_handler.generate_explanation(
         refined_question, 
         levels,
@@ -418,7 +423,6 @@ def generate_demo(request: DemoRequest):
     )
     demo_data = langchain_handler.generate_demo(refined_concept)
     
-    # Save history
     session_manager.save_history(
         session_id,
         f"Generate demo for: {refined_concept}",
@@ -494,10 +498,8 @@ def generate_thought_questions(request: ThoughtRequest):
         f"Generating {request.count} thought questions about: {refined_topic}"
     )
     
-    # Generate thought questions using LangChain
     questions = langchain_handler.generate_thought_questions(refined_topic, request.count or 3)
     
-    # Save history
     session_manager.save_history(
         session_id,
         f"Generate thought questions for: {refined_topic}",
@@ -524,21 +526,10 @@ def execute_code(request: CodeExecutionRequest):
     
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-    
-    # Save input
     session_manager.save_context(session_id, f"Analyzing {request.language} code execution")
-    
-    # NOTE: For security reasons, we don't actually execute arbitrary code
-    # Instead, we use AI to analyze what the code would do
-    
-    # Analyze code using LangChain
     analysis = langchain_handler.analyze_code(request.code, request.language or "python")
-    
-    # Extract output/error from analysis
     output = analysis.get("output", "Code analysis completed")
     error = analysis.get("error")
-    
-    # Save history
     session_manager.save_history(
         session_id,
         f"Execute code: {request.code[:50]}...",
@@ -555,12 +546,6 @@ def execute_code(request: CodeExecutionRequest):
 
 @app.post("/api/example-code", response_model=ExampleCodeResponse)
 def generate_example_code(request: ExampleCodeRequest):
-    """
-    Generate professional, production-ready code examples.
-    Requires session_id from /api/explain. Uses session topic automatically.
-    Difficulty levels: beginner, intermediate, professional
-    """
-    # Require session_id
     session_id = request.session_id
     if not session_id:
         raise HTTPException(
@@ -570,37 +555,24 @@ def generate_example_code(request: ExampleCodeRequest):
     
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-    
-    # Get topic from session (or use provided topic as override)
-    # Ignore placeholder values like "string"
     topic = request.topic if (request.topic and request.topic.lower() != "string") else session_manager.get_topic(session_id)
     if not topic:
         raise HTTPException(
             status_code=400, 
             detail="No topic found in session. Please call /api/explain first to set a topic."
         )
-    
-    # Get levels from session (or use provided levels as override)
     levels = request.levels if (request.levels and request.levels.lower() != "string") else session_manager.get_levels(session_id)
     language = request.language or "python"
-    
-    # Refine topic
     refined_topic = langchain_handler.refine_user_input(topic)
-    
-    # Save input with levels
     session_manager.save_context(
         session_id, 
         f"Generating {language} code example for: {refined_topic}\nLevels: {levels}"
     )
-    
-    # Generate code example using LangChain
     code_result = langchain_handler.generate_example_code(
         refined_topic, 
         levels,
         language
     )
-    
-    # Save history
     session_manager.save_history(
         session_id,
         f"Generate {language} code for: {refined_topic} ({levels})",
@@ -619,8 +591,6 @@ def generate_example_code(request: ExampleCodeRequest):
         language=language,
         session_id=session_id
     )
-
-# Session Management Endpoints
 @app.post("/api/session/create", response_model=SessionCreateResponse)
 def create_session():
     """Create a new chat session with unique UUID."""
@@ -635,7 +605,6 @@ def create_session():
 
 @app.get("/api/session/{session_id}/history", response_model=SessionHistoryResponse)
 def get_session_history(session_id: str):
-    """Retrieve conversation history for a session."""
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
@@ -650,7 +619,6 @@ def get_session_history(session_id: str):
 
 @app.get("/api/session/{session_id}/context", response_model=SessionContextResponse)
 def get_session_context(session_id: str):
-    """Retrieve context for a session."""
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
@@ -663,7 +631,6 @@ def get_session_context(session_id: str):
 
 @app.get("/api/session/{session_id}/metadata", response_model=SessionMetadataResponse)
 def get_session_metadata(session_id: str):
-    """Get session metadata."""
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
@@ -673,7 +640,6 @@ def get_session_metadata(session_id: str):
 
 @app.get("/api/sessions", response_model=SessionListResponse)
 def list_sessions():
-    """List all available sessions."""
     sessions = session_manager.list_sessions()
     
     return SessionListResponse(
@@ -683,7 +649,6 @@ def list_sessions():
 
 @app.delete("/api/session/{session_id}")
 def delete_session(session_id: str):
-    """Delete a session."""
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
@@ -698,37 +663,17 @@ def delete_session(session_id: str):
 async def upload_pdf(
     session_id: str, 
     file: UploadFile = File(...),
-    chunk_size: int = 2000,  # Larger chunks = faster processing
-    overlap: int = 100  # Less overlap = faster processing
+    chunk_size: int = 2000,
+    overlap: int = 100 
 ):
-    """
-    Upload a PDF file to a session and store chunks in vector database.
-    OPTIMIZED: Uses larger chunks and less overlap for faster processing.
-    
-    Args:
-        session_id: Session UUID
-        file: PDF file to upload
-        chunk_size: Maximum characters per chunk (default: 2000, optimized for speed)
-        overlap: Number of overlapping characters between chunks (default: 100, optimized for speed)
-    
-    Returns:
-        Dictionary with upload status, document ID, and chunk information
-    """
+
     if not session_manager.session_exists(session_id):
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
-    
-    # Check file type
     filename = file.filename or "input.pdf"
     if not filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
-    
-    # Read file content
     content = await file.read()
-    
-    # Save PDF to session directory
     pdf_path = session_manager.save_pdf_input(session_id, content, filename)
-    
-    # Process PDF and store chunks in vector database
     try:
         result = vector_db.add_pdf_chunks(
             pdf_path=pdf_path,
@@ -751,7 +696,6 @@ async def upload_pdf(
         }
         
     except Exception as e:
-        # PDF saved but vector DB storage failed
         return {
             "message": "PDF uploaded successfully but vector DB indexing failed",
             "session_id": session_id,

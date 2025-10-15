@@ -22,7 +22,6 @@ class LangChainHandler:
             temperature=0.7,
             convert_system_message_to_human=True
         )
-        
         self.str_parser = StrOutputParser()
         self.json_parser = JsonOutputParser()
     
