@@ -169,6 +169,25 @@ class SessionListResponse(BaseModel):
     sessions: List[dict]
     total_count: int
 
+class DebugCodeRequest(BaseModel):
+    code: str = Field(..., description="Code to debug and analyze")
+    language: Optional[str] = Field(default="python", description="Programming language")
+    session_id: Optional[str] = None
+
+class DebugCodeResponse(BaseModel):
+    code: str
+    execution_output: str
+    error_logs: Optional[str]
+    error_type: Optional[str]
+    stack_trace: Optional[str]
+    exit_code: int  # 0 for success, 1 for failure
+    runtime_duration: str  # in seconds
+    memory_usage: str  # in MB
+    syntax_errors: List[str]
+    ai_analysis: str  # AI analysis of the code and errors
+    suggestions: List[str]  # AI suggestions for fixing
+    session_id: str
+
 @app.get("/")
 def read_root():
     return {
@@ -181,7 +200,8 @@ def read_root():
             "demo": "/api/demo",
             "flowchart": "/api/flowchart",
             "thought-questions": "/api/thought-questions",
-            "execute-code": "/api/execute-code"
+            "execute-code": "/api/execute-code",
+            "debug-code": "/api/debug-code"
         }
     }
 
@@ -861,6 +881,179 @@ def list_topics():
             "Python Programming"
         ]
     }
+
+@app.post("/api/debug-code", response_model=DebugCodeResponse)
+def debug_code(request: DebugCodeRequest):
+    """
+    Debug and analyze code with execution diagnostics.
+    Executes the code safely and provides detailed error analysis.
+    Requires session_id from /api/explain.
+    """
+    import sys
+    import io
+    import traceback
+    import time
+    import psutil
+    import os
+    from contextlib import redirect_stdout, redirect_stderr
+    
+    # Require session_id
+    session_id = request.session_id
+    if not session_id or not session_manager.session_exists(session_id):
+        session_id = session_manager.create_session()
+    
+    language = request.language or "python"
+    code = request.code
+    
+    # Save input
+    session_manager.save_context(session_id, f"Debugging {language} code")
+    
+    # Initialize response variables
+    execution_output = ""
+    error_logs = None
+    error_type = None
+    stack_trace = None
+    exit_code = 0
+    runtime_duration = "0.000"
+    memory_usage = "0.00"
+    syntax_errors = []
+    
+    # Step 1: Check for syntax errors
+    try:
+        compile(code, '<string>', 'exec')
+    except SyntaxError as e:
+        syntax_errors.append(f"Line {e.lineno}: {e.msg}")
+        error_type = "SyntaxError"
+        error_logs = str(e)
+        exit_code = 1
+    
+    # Step 2: Execute the code if no syntax errors
+    if not syntax_errors and language.lower() == "python":
+        # Capture stdout and stderr
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+        
+        # Get initial memory
+        process = psutil.Process(os.getpid())
+        memory_before = process.memory_info().rss / 1024 / 1024  # Convert to MB
+        
+        # Measure execution time
+        start_time = time.time()
+        
+        try:
+            # Create a safe execution environment
+            exec_globals = {
+                '__builtins__': __builtins__,
+                '__name__': '__main__',
+            }
+            
+            # Execute with stdout/stderr capture
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exec(code, exec_globals)
+            
+            execution_output = stdout_capture.getvalue()
+            stderr_output = stderr_capture.getvalue()
+            
+            if stderr_output:
+                execution_output += f"\n[stderr]: {stderr_output}"
+            
+            if not execution_output:
+                execution_output = "[No output - code executed successfully]"
+                
+        except Exception as e:
+            exit_code = 1
+            error_type = type(e).__name__
+            error_logs = str(e)
+            stack_trace = traceback.format_exc()
+            execution_output = stdout_capture.getvalue()
+            
+        finally:
+            end_time = time.time()
+            runtime_duration = f"{end_time - start_time:.3f}"
+            
+            # Calculate memory usage
+            memory_after = process.memory_info().rss / 1024 / 1024
+            memory_usage = f"{memory_after - memory_before:.2f}"
+    
+    elif language.lower() != "python":
+        execution_output = f"[Note: Only Python execution is supported. {language} code was analyzed but not executed.]"
+        exit_code = 0
+    
+    # Step 3: Get AI analysis of the code and errors
+    analysis_prompt = f"""Analyze this {language} code and provide insights:
+
+Code:
+```{language}
+{code}
+```
+
+Execution Results:
+- Exit Code: {exit_code}
+- Output: {execution_output}
+- Errors: {error_logs if error_logs else 'None'}
+- Error Type: {error_type if error_type else 'None'}
+- Syntax Errors: {', '.join(syntax_errors) if syntax_errors else 'None'}
+
+Provide:
+1. Analysis of what the code does
+2. Explanation of any errors
+3. Code quality assessment
+"""
+    
+    try:
+        ai_result = langchain_handler.analyze_code(code, language)
+        # Ensure we get strings, not lists
+        ai_analysis_raw = ai_result.get("explanation", "Code analysis completed")
+        suggestions_raw = ai_result.get("improvements", [])
+        
+        # Convert to strings if needed
+        if isinstance(ai_analysis_raw, list):
+            ai_analysis = "\n".join(str(item) for item in ai_analysis_raw)
+        else:
+            ai_analysis = str(ai_analysis_raw)
+        
+        if isinstance(suggestions_raw, list):
+            suggestions = [str(item) for item in suggestions_raw]
+        else:
+            suggestions = [str(suggestions_raw)]
+        
+        # If there are errors, add error-specific analysis
+        if error_logs or syntax_errors:
+            error_analysis = f"\n\n**Error Analysis:**\n"
+            if syntax_errors:
+                error_analysis += f"- Syntax errors detected: {', '.join(syntax_errors)}\n"
+            if error_type:
+                error_analysis += f"- Error type: **{error_type}**\n"
+            if error_logs:
+                error_analysis += f"- Error message: {error_logs}\n"
+            
+            ai_analysis += error_analysis
+    except Exception as e:
+        ai_analysis = f"Code execution completed. Exit code: {exit_code}"
+        suggestions = ["Review the error logs for details"] if exit_code != 0 else []
+    
+    # Save history
+    session_manager.save_history(
+        session_id,
+        f"Debug code: {code[:50]}...",
+        f"Exit code: {exit_code}, Duration: {runtime_duration}s",
+        "debug_code"
+    )
+    
+    return DebugCodeResponse(
+        code=code,
+        execution_output=execution_output,
+        error_logs=error_logs,
+        error_type=error_type,
+        stack_trace=stack_trace,
+        exit_code=exit_code,
+        runtime_duration=f"{runtime_duration} seconds",
+        memory_usage=f"{memory_usage} MB",
+        syntax_errors=syntax_errors,
+        ai_analysis=ai_analysis,
+        suggestions=suggestions,
+        session_id=session_id
+    )
 
 if __name__ == "__main__":
     import uvicorn
