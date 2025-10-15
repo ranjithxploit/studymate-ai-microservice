@@ -83,14 +83,15 @@ Keep the user's intent but make it clearer and more professional."""),
         prompt = ChatPromptTemplate.from_messages([
             ("system", f"""{system_prompt}
 
-Your response must be in this exact JSON format:
+Your response must be in this exact JSON format with MARKDOWN formatting:
 {{{{
-    "explanation": "Clear, concise explanation tailored to {levels} level",
-    "example": "Relevant real-world example that resonates with {levels} learners",
+    "explanation": "Clear, concise explanation in MARKDOWN format using:\n- Headers (##, ###) for sections\n- **Bold** for emphasis\n- *Italic* for terminology\n- `code` for technical terms\n- Bullet points (-) for lists\n- > for important notes or quotes",
+    "example": "Relevant real-world example in MARKDOWN format with:\n- Code blocks (```language```) if showing code\n- **Bold** for key parts\n- Clear formatting for readability",
     "key_points": ["Point 1", "Point 2", "Point 3"],
     "further_reading": "Suggested next topics appropriate for {levels} level"
 }}}}
 
+IMPORTANT: Format both explanation and example fields using proper Markdown syntax for better readability.
 Remember: Adapt your language, depth, and examples specifically for {levels} learners."""),
             ("human", "Context: {context}\n\nQuestion: {question}\n\nContent Level: {levels}")
         ])
@@ -106,7 +107,7 @@ Remember: Adapt your language, depth, and examples specifically for {levels} lea
             return result
         except Exception as e:
             fallback_prompt = ChatPromptTemplate.from_messages([
-                ("system", f"Explain the following at {levels} level with an example:"),
+                ("system", f"Explain the following at {levels} level with an example in Markdown format:"),
                 ("human", "{question}")
             ])
             fallback_chain = fallback_prompt | self.llm | self.str_parser
@@ -404,31 +405,40 @@ Requirements:
     
     def generate_flowchart(self, concept: str) -> Dict[str, Any]:
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """Create a flowchart for the given concept. Return JSON:
+            ("system", """Create a flowchart for the given concept. Return JSON with proper Mermaid.js syntax:
 {{
     "title": "Flowchart title",
-    "mermaid": "graph TD\\nA[Start] --> B[Step 1]\\nB --> C[Step 2]",
-    "description": "Description of the flow",
-    "nodes": [
-        {{"id": "A", "label": "Start", "type": "start"}},
-        {{"id": "B", "label": "Step 1", "type": "process"}}
-    ]
+    "mermaid_code": "graph TD\\n    A[Start] --> B[Step 1]\\n    B --> C[Decision]\\n    C -->|Yes| D[Step 2]\\n    C -->|No| E[Alternative]\\n    D --> F[End]\\n    E --> F",
+    "steps": ["Step 1 description", "Step 2 description", "Step 3 description"],
+    "description": "Description of the flow"
 }}
 
-Use proper Mermaid.js syntax."""),
+IMPORTANT: 
+- Use "mermaid_code" field (not "mermaid")
+- Include a "steps" array with text descriptions
+- Use proper Mermaid.js syntax with clear node labels
+- Use graph TD for top-down, LR for left-right
+- Include decision nodes with conditional arrows when appropriate
+- Format example: graph TD\\n    A[Start] --> B[Process]"""),
             ("human", "Concept: {concept}")
         ])
         
         chain = prompt | self.llm | self.json_parser
         
         try:
-            return chain.invoke({"concept": concept})
+            result = chain.invoke({"concept": concept})
+            # Ensure the correct field names exist
+            if "mermaid" in result and "mermaid_code" not in result:
+                result["mermaid_code"] = result.pop("mermaid")
+            if "steps" not in result:
+                result["steps"] = ["Step 1: " + result.get("description", "Process flow")]
+            return result
         except Exception:
             return {
                 "title": concept,
-                "mermaid": "graph TD\nA[Start]",
-                "description": "",
-                "nodes": []
+                "mermaid_code": f"graph TD\n    A[Start: {concept}] --> B[Processing]\n    B --> C[End]",
+                "steps": ["Start with " + concept, "Process the flow", "Complete"],
+                "description": "Simple flow diagram"
             }
     
     def generate_thought_questions(

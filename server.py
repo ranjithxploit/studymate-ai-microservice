@@ -19,7 +19,7 @@ MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 vector_db = get_vector_db()
 langchain_handler = get_langchain_handler()
 app = FastAPI(
-    title="AI Explainer Bot API",
+    title="StudyMate AI API",
     description="Educational AI API for explaining concepts, generating quizzes, flashcards, and more",
     version="2.0.0"
 )
@@ -33,7 +33,7 @@ app.add_middleware(
 
 class ExplainRequest(BaseModel):
     question: str = Field(..., example="What is machine learning?")
-    levels: Optional[str] = Field("beginner", example="beginner")  # beginner, university, researcher
+    levels: Optional[str] = Field("beginner", example="beginner")
     session_id: Optional[str] = None
 
 class PdfChunk(BaseModel):
@@ -48,14 +48,14 @@ class ExplainResponse(BaseModel):
     question: str
     explanation: str
     example: str
-    levels: str  # beginner, university, researcher
+    levels: str 
     session_id: str
-    pdf_chunks: Optional[List[PdfChunk]] = None  # PDF chunks if available
+    pdf_chunks: Optional[List[PdfChunk]] = None
 
 class FlashcardRequest(BaseModel):
-    topic: Optional[str] = None  # Optional - uses session topic if not provided
+    topic: Optional[str] = None
     count: Optional[int] = Field(5, ge=1, le=20)
-    levels: Optional[str] = None  # Optional - uses session levels if not provided (beginner, university, researcher)
+    levels: Optional[str] = None
     session_id: Optional[str] = None
 
 class Flashcard(BaseModel):
@@ -68,10 +68,10 @@ class FlashcardResponse(BaseModel):
     session_id: str
 
 class QuizRequest(BaseModel):
-    topic: Optional[str] = None  # Optional - uses session topic if not provided
+    topic: Optional[str] = None 
     num_questions: Optional[int] = Field(5, ge=1, le=20)
-    levels: Optional[str] = None  # Optional - uses session levels if not provided (beginner, university, researcher)
-    quiz_difficulty: Optional[str] = Field("medium", example="medium")  # Question difficulty: easy, medium, hard
+    levels: Optional[str] = None 
+    quiz_difficulty: Optional[str] = Field("medium", example="medium")
     session_id: Optional[str] = None
 
 class QuizQuestion(BaseModel):
@@ -86,7 +86,7 @@ class QuizResponse(BaseModel):
     session_id: str
 
 class DemoRequest(BaseModel):
-    concept: Optional[str] = None  # Optional - uses session topic if not provided
+    concept: Optional[str] = None
     session_id: Optional[str] = None
 
 class DemoResponse(BaseModel):
@@ -97,7 +97,7 @@ class DemoResponse(BaseModel):
     session_id: str
 
 class FlowchartRequest(BaseModel):
-    concept: Optional[str] = None  # Optional - uses session topic if not provided
+    concept: Optional[str] = None
     session_id: Optional[str] = None
 
 class FlowchartResponse(BaseModel):
