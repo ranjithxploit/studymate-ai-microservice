@@ -22,7 +22,9 @@ class SessionManager:
             "created_at": datetime.now().isoformat(),
             "last_updated": datetime.now().isoformat(),
             "message_count": 0,
-            "has_pdf_input": False
+            "has_pdf_input": False,
+            "topics": [],  # List of topics in order (latest last) - supports multiple topics
+            "levels": None  # Content complexity level: beginner, university, researcher
         }
         
         with open(metadata_file, 'w', encoding='utf-8') as f:
@@ -194,6 +196,115 @@ class SessionManager:
             raise ValueError(f"Session {session_id} does not exist")
         
         return self._load_metadata(session_id)
+    
+    def set_topic(self, session_id: str, topic: str, levels: str = "beginner") -> None:
+        """
+        Add a new topic to the session (appends to list, doesn't replace)
+        
+        Args:
+            session_id: Session UUID
+            topic: The topic/question to add to this session
+            levels: Content complexity level (beginner, university, researcher)
+        """
+        if not self.session_exists(session_id):
+            raise ValueError(f"Session {session_id} does not exist")
+        
+        metadata = self._load_metadata(session_id)
+        
+        # Initialize topics list if it doesn't exist (backward compatibility)
+        if "topics" not in metadata:
+            metadata["topics"] = []
+        
+        # Append new topic to the list
+        metadata["topics"].append({
+            "topic": topic,
+            "added_at": datetime.now().isoformat()
+        })
+        
+        # Update levels (latest takes precedence)
+        metadata["levels"] = levels
+        metadata["last_topic_added_at"] = datetime.now().isoformat()
+        
+        self._save_metadata(session_id, metadata)
+    
+    def get_topic(self, session_id: str) -> Optional[str]:
+        """
+        Get the most recent topic for a session
+        
+        Args:
+            session_id: Session UUID
+            
+        Returns:
+            Optional[str]: The most recent topic or None if no topics exist
+        """
+        if not self.session_exists(session_id):
+            raise ValueError(f"Session {session_id} does not exist")
+        
+        metadata = self._load_metadata(session_id)
+        topics = metadata.get("topics", [])
+        
+        if topics:
+            return topics[-1]["topic"]  # Return most recent topic
+        
+        # Backward compatibility: check old "topic" field
+        return metadata.get("topic")
+    
+    def get_all_topics(self, session_id: str) -> List[str]:
+        """
+        Get all topics for a session in order (oldest first, newest last)
+        
+        Args:
+            session_id: Session UUID
+            
+        Returns:
+            List[str]: List of all topics in the session
+        """
+        if not self.session_exists(session_id):
+            raise ValueError(f"Session {session_id} does not exist")
+        
+        metadata = self._load_metadata(session_id)
+        topics = metadata.get("topics", [])
+        
+        topic_list = [t["topic"] for t in topics]
+        
+        # Backward compatibility: include old "topic" field if exists
+        old_topic = metadata.get("topic")
+        if old_topic and old_topic not in topic_list:
+            topic_list.insert(0, old_topic)
+        
+        return topic_list
+    
+    def get_difficulty(self, session_id: str) -> str:
+        """
+        Get the levels (content complexity) for a session
+        
+        Args:
+            session_id: Session UUID
+            
+        Returns:
+            str: The levels or 'beginner' as default
+        """
+        if not self.session_exists(session_id):
+            raise ValueError(f"Session {session_id} does not exist")
+        
+        metadata = self._load_metadata(session_id)
+        
+        # Try new "levels" field first, fallback to old "difficulty" field
+        levels = metadata.get("levels") or metadata.get("difficulty")
+        
+        return levels if levels else "beginner"
+    
+    def get_levels(self, session_id: str) -> str:
+        """
+        Alias for get_difficulty() with better naming
+        
+        Args:
+            session_id: Session UUID
+            
+        Returns:
+            str: The content complexity level (beginner, university, researcher)
+        """
+        return self.get_difficulty(session_id)
     
     def get_pdf_files(self, session_id: str) -> List[Dict]:
         """

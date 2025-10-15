@@ -52,7 +52,7 @@ Keep the user's intent but make it clearer and more professional."""),
     def generate_explanation(
         self, 
         question: str, 
-        difficulty: str = "beginner",
+        levels: str = "beginner",  # Changed from 'difficulty' to 'levels'
         context: str = ""
     ) -> Dict[str, str]:
         """
@@ -60,15 +60,15 @@ Keep the user's intent but make it clearer and more professional."""),
         
         Args:
             question: The question to explain
-            difficulty: Difficulty level (beginner/intermediate/professional)
+            levels: Content complexity level (beginner/university/researcher)
             context: Additional context
             
         Returns:
             Dict with explanation, example, and key_points
         """
         
-        # Define difficulty-specific system prompts
-        difficulty_prompts = {
+        # Define levels-specific system prompts
+        levels_prompts = {
             "beginner": """You are a friendly and patient teacher explaining to absolute beginners. 
 - Use simple, everyday language with NO jargon
 - Explain concepts like you're talking to someone with no prior knowledge
@@ -76,36 +76,36 @@ Keep the user's intent but make it clearer and more professional."""),
 - Break down complex ideas into simple steps
 - Be encouraging and avoid overwhelming details""",
             
-            "intermediate": """You are an experienced educator teaching intermediate learners.
-- Assume basic foundational knowledge exists
-- Use technical terms but explain them when first introduced
-- Provide deeper insights and connections between concepts
-- Include practical applications and use cases
-- Balance theory with hands-on understanding""",
+            "university": """You are a university professor teaching students with solid foundational knowledge.
+- Assume basic concepts are understood
+- Use academic terminology and explain advanced concepts
+- Provide theoretical depth with mathematical/technical foundations
+- Include research context and scholarly perspectives
+- Balance rigorous explanation with practical applications""",
             
-            "professional": """You are an expert consultant addressing professionals and advanced practitioners.
-- Use industry-standard terminology and technical precision
-- Assume strong foundational knowledge and skip basics
-- Focus on advanced patterns, best practices, and optimization
-- Discuss edge cases, trade-offs, and architectural considerations
-- Reference research papers, industry standards, and cutting-edge techniques"""
+            "researcher": """You are an expert researcher addressing fellow researchers and professionals.
+- Use advanced technical terminology and assume expert-level knowledge
+- Focus on cutting-edge research, novel approaches, and theoretical implications
+- Discuss methodologies, experimental designs, and statistical considerations
+- Reference recent papers, ongoing research, and unsolved problems
+- Emphasize research gaps, future directions, and potential breakthroughs"""
         }
         
-        system_prompt = difficulty_prompts.get(difficulty, difficulty_prompts["beginner"])
+        system_prompt = levels_prompts.get(levels, levels_prompts["beginner"])
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", f"""{system_prompt}
 
 Your response must be in this exact JSON format:
 {{{{
-    "explanation": "Clear, concise explanation tailored to {difficulty} level",
-    "example": "Relevant real-world example that resonates with {difficulty} learners",
+    "explanation": "Clear, concise explanation tailored to {levels} level",
+    "example": "Relevant real-world example that resonates with {levels} learners",
     "key_points": ["Point 1", "Point 2", "Point 3"],
-    "further_reading": "Suggested next topics appropriate for {difficulty} level"
+    "further_reading": "Suggested next topics appropriate for {levels} level"
 }}}}
 
-Remember: Adapt your language, depth, and examples specifically for {difficulty} learners."""),
-            ("human", "Context: {context}\n\nQuestion: {question}\n\nDifficulty Level: {difficulty}")
+Remember: Adapt your language, depth, and examples specifically for {levels} learners."""),
+            ("human", "Context: {context}\n\nQuestion: {question}\n\nContent Level: {levels}")
         ])
         
         chain = prompt | self.llm | self.json_parser
@@ -113,14 +113,14 @@ Remember: Adapt your language, depth, and examples specifically for {difficulty}
         try:
             result = chain.invoke({
                 "question": question,
-                "difficulty": difficulty,
+                "levels": levels,
                 "context": context or "No additional context"
             })
             return result
         except Exception as e:
             # Fallback to simple format
             fallback_prompt = ChatPromptTemplate.from_messages([
-                ("system", f"Explain the following at {difficulty} level with an example:"),
+                ("system", f"Explain the following at {levels} level with an example:"),
                 ("human", "{question}")
             ])
             fallback_chain = fallback_prompt | self.llm | self.str_parser
@@ -137,59 +137,66 @@ Remember: Adapt your language, depth, and examples specifically for {difficulty}
         self, 
         topic: str, 
         count: int = 5,
-        difficulty: str = "intermediate"
+        levels: str = "beginner",  # Changed from difficulty to levels
+        all_topics: Optional[List[str]] = None  # Support for multiple topics
     ) -> List[Dict[str, str]]:
         """
         Generate educational flashcards with LangChain
         
         Args:
-            topic: Topic for flashcards
+            topic: Primary topic for flashcards
             count: Number of flashcards
-            difficulty: Difficulty level (beginner/intermediate/professional)
+            levels: Content complexity level (beginner/university/researcher)
+            all_topics: Optional list of all session topics for context
             
         Returns:
             List of flashcard dictionaries
         """
         
-        # Difficulty-specific instructions
-        difficulty_instructions = {
+        # Levels-specific instructions
+        levels_instructions = {
             "beginner": """Create flashcards for absolute beginners:
 - Use simple, clear language without jargon
 - Focus on fundamental concepts and definitions
 - Include helpful hints and memory aids
 - Make questions straightforward and unambiguous""",
             
-            "intermediate": """Create flashcards for intermediate learners:
-- Assume basic knowledge and build upon it
-- Include technical terms with context
-- Test understanding of relationships and applications
-- Balance recall with comprehension questions""",
+            "university": """Create flashcards for university-level students:
+- Assume solid foundational knowledge
+- Use academic terminology appropriately
+- Test theoretical understanding and analytical skills
+- Include conceptual relationships and applications""",
             
-            "professional": """Create flashcards for advanced professionals:
-- Use industry-standard terminology
-- Focus on best practices, patterns, and edge cases
-- Include scenario-based questions
-- Test deep understanding and practical application"""
+            "researcher": """Create flashcards for researchers and experts:
+- Use advanced technical terminology
+- Focus on research methodologies and cutting-edge concepts
+- Test critical analysis and synthesis abilities
+- Include complex scenarios and theoretical implications"""
         }
         
-        instruction = difficulty_instructions.get(difficulty, difficulty_instructions["intermediate"])
+        instruction = levels_instructions.get(levels, levels_instructions["beginner"])
+        
+        # Build context about all topics if provided
+        topics_context = ""
+        if all_topics and len(all_topics) > 1:
+            topics_context = f"\n\nSession Context: This session has covered these topics in order: {', '.join(all_topics)}. Focus primarily on '{topic}' but you may include some questions from previous topics for reinforcement."
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", f"""You are a flashcard creation expert. Generate {{count}} high-quality flashcards.
 
-{instruction}
+{instruction}{topics_context}
 
 Return JSON array format:
 [
     {{{{
-        "front": "Question or prompt appropriate for {difficulty} level",
-        "back": "Clear, accurate answer tailored to {difficulty} audience",
+        "front": "Question or prompt appropriate for {levels} level",
+        "back": "Clear, accurate answer tailored to {levels} audience",
         "hint": "Optional hint that guides without giving away the answer"
     }}}}
 ]
 
-Adapt complexity and terminology to {difficulty} level."""),
-            ("human", "Topic: {topic}\nCount: {count}\nDifficulty: {difficulty}")
+Adapt complexity and terminology to {levels} level."""),
+            ("human", "Primary Topic: {topic}\nCount: {count}\nContent Level: {levels}")
         ])
         
         chain = prompt | self.llm | self.json_parser
@@ -198,7 +205,7 @@ Adapt complexity and terminology to {difficulty} level."""),
             result = chain.invoke({
                 "topic": topic,
                 "count": count,
-                "difficulty": difficulty
+                "levels": levels
             })
             return result if isinstance(result, list) else []
         except Exception as e:
@@ -209,63 +216,101 @@ Adapt complexity and terminology to {difficulty} level."""),
         self, 
         topic: str, 
         count: int = 5,
-        difficulty: str = "intermediate"
+        levels: str = "beginner",  # Changed from difficulty to levels (content complexity)
+        quiz_difficulty: str = "medium",  # NEW: Question difficulty (easy/medium/hard)
+        all_topics: Optional[List[str]] = None  # Support for priority-based multi-topic quizzes
     ) -> List[Dict[str, Any]]:
         """
-        Generate quiz questions with multiple choice options
+        Generate quiz questions with priority-based topic selection
         
         Args:
-            topic: Quiz topic
+            topic: Primary topic for quiz (gets priority)
             count: Number of questions
-            difficulty: Difficulty level (beginner/intermediate/professional)
+            levels: Content complexity level (beginner/university/researcher)
+            quiz_difficulty: Question difficulty (easy/medium/hard)
+            all_topics: Optional list of all session topics - if provided, quiz will prioritize 
+                       the main topic but include some questions from earlier topics
             
         Returns:
             List of quiz question dictionaries
         """
         
-        # Difficulty-specific quiz instructions
-        difficulty_instructions = {
-            "beginner": """Create beginner-friendly multiple-choice questions:
+        # Levels-specific quiz instructions (content complexity)
+        levels_instructions = {
+            "beginner": """Content Level: Beginner
 - Focus on basic concepts and fundamental understanding
 - Use clear, simple language in questions and options
-- Make correct answers obvious for learning reinforcement
-- Include encouraging explanations that teach
-- Avoid trick questions or confusing distractors""",
+- Cover foundational terminology and core principles
+- Build confidence through clear, unambiguous questions""",
             
-            "intermediate": """Create intermediate-level multiple-choice questions:
-- Test understanding of relationships and applications
-- Use technical terminology appropriately
-- Include plausible distractors that test real comprehension
-- Require thinking beyond simple recall
-- Provide explanations that deepen understanding""",
+            "university": """Content Level: University
+- Test theoretical understanding and analytical reasoning
+- Use academic terminology and concepts
+- Include conceptual relationships and applications
+- Require synthesis of multiple ideas""",
             
-            "professional": """Create professional-level multiple-choice questions:
-- Test expert knowledge, best practices, and edge cases
-- Use industry-standard terminology
-- Include subtle distractors that only experts can identify
-- Test scenario-based problem solving
-- Provide explanations with technical depth and references"""
+            "researcher": """Content Level: Researcher
+- Test expert knowledge and research methodologies
+- Use advanced technical terminology
+- Include cutting-edge concepts and novel approaches
+- Require critical analysis and deep domain expertise"""
         }
         
-        instruction = difficulty_instructions.get(difficulty, difficulty_instructions["intermediate"])
+        # Quiz difficulty instructions (question difficulty)
+        quiz_difficulty_instructions = {
+            "easy": """Question Difficulty: Easy
+- Make correct answers relatively obvious
+- Use straightforward distractors
+- Focus on recognition and recall
+- Provide clear hints in the question stem""",
+            
+            "medium": """Question Difficulty: Medium
+- Require genuine understanding, not just memorization
+- Use plausible distractors that test comprehension
+- Balance between recall and application
+- Include scenario-based elements""",
+            
+            "hard": """Question Difficulty: Hard
+- Create subtle, tricky distractors
+- Test edge cases and exceptions
+- Require deep analysis and problem-solving
+- Include complex scenarios with multiple considerations"""
+        }
+        
+        levels_instruction = levels_instructions.get(levels, levels_instructions["beginner"])
+        difficulty_instruction = quiz_difficulty_instructions.get(quiz_difficulty, quiz_difficulty_instructions["medium"])
+        
+        # Build priority-based topic instruction
+        priority_instruction = ""
+        if all_topics and len(all_topics) > 1:
+            other_topics = [t for t in all_topics if t != topic]
+            priority_instruction = f"""
+IMPORTANT - Topic Distribution:
+- Primary focus ({int(70 + (10/len(all_topics)))}% of questions): {topic}
+- Secondary topics ({int(30 - (10/len(all_topics)))}% of questions): {', '.join(other_topics)}
+
+This creates a quiz that emphasizes the current topic while reinforcing previous learning.
+"""
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", f"""You are a quiz generation expert. Create {{count}} multiple-choice questions.
 
-{instruction}
+{levels_instruction}
+
+{difficulty_instruction}{priority_instruction}
 
 Return JSON array:
 [
     {{{{
-        "question": "Question text appropriate for {difficulty} learners",
+        "question": "Question text (content at {levels} level, difficulty at {quiz_difficulty} level)",
         "options": ["Option A", "Option B", "Option C", "Option D"],
         "correct_answer": "Correct option text (must match one of the options exactly)",
-        "explanation": "Clear explanation of why this is correct, tailored to {difficulty} level"
+        "explanation": "Clear explanation tailored to {levels} learners"
     }}}}
 ]
 
-Ensure all elements match the {difficulty} difficulty level."""),
-            ("human", "Topic: {topic}\nCount: {count}\nDifficulty: {difficulty}")
+Balance content complexity ({levels}) with question difficulty ({quiz_difficulty})."""),
+            ("human", "Primary Topic: {topic}\nQuestion Count: {count}\nContent Level: {levels}\nQuestion Difficulty: {quiz_difficulty}")
         ])
         
         chain = prompt | self.llm | self.json_parser
@@ -274,7 +319,8 @@ Ensure all elements match the {difficulty} difficulty level."""),
             result = chain.invoke({
                 "topic": topic,
                 "count": count,
-                "difficulty": difficulty
+                "levels": levels,
+                "quiz_difficulty": quiz_difficulty
             })
             return result if isinstance(result, list) else []
         except Exception:
@@ -282,46 +328,56 @@ Ensure all elements match the {difficulty} difficulty level."""),
     
     def generate_demo(
         self, 
-        concept: str,
-        complexity: str = "simple"
+        concept: str
     ) -> Dict[str, Any]:
         """
-        Generate step-by-step demonstration
+        Generate step-by-step code demonstration
         
         Args:
             concept: Concept to demonstrate
-            complexity: Complexity level
             
         Returns:
-            Dict with steps and explanation
+            Dict with code, explanation, and output
         """
+        
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """Create a step-by-step demonstration. Return JSON:
+            ("system", """You are a coding instructor creating clear, practical demonstrations.
+
+Create a demonstration that:
+- Shows working, complete code with helpful comments
+- Provides a clear step-by-step explanation
+- Includes realistic example output
+- Uses best practices and clean code
+- Is easy to understand and follow
+
+Return JSON format:
 {{
-    "title": "Demonstration title",
-    "steps": [
-        {{"step": 1, "description": "First step", "code": "code example if applicable"}},
-        {{"step": 2, "description": "Second step", "code": "code example if applicable"}}
-    ],
-    "summary": "Summary of what was demonstrated",
-    "tips": ["Tip 1", "Tip 2"]
+    "code": "Complete, working Python code with comments",
+    "explanation": "Clear step-by-step explanation of how the code works",
+    "output": "Realistic example output when the code runs"
 }}
 
-Complexity: {complexity}"""),
+Make the demonstration practical and educational."""),
             ("human", "Concept: {concept}")
         ])
         
         chain = prompt | self.llm | self.json_parser
         
         try:
-            return chain.invoke({"concept": concept, "complexity": complexity})
-        except Exception:
-            return {"title": concept, "steps": [], "summary": "", "tips": []}
+            result = chain.invoke({"concept": concept})
+            return result
+        except Exception as e:
+            # Fallback
+            return {
+                "code": f"# Demonstration of {concept}\nprint('Example code')",
+                "explanation": f"This demonstrates {concept}",
+                "output": "Example output"
+            }
     
     def generate_example_code(
         self,
         topic: str,
-        difficulty: str = "intermediate",
+        levels: str = "beginner",  # Changed from difficulty to levels
         language: str = "python"
     ) -> Dict[str, Any]:
         """
@@ -329,15 +385,15 @@ Complexity: {complexity}"""),
         
         Args:
             topic: Programming topic or concept
-            difficulty: Difficulty level (beginner/intermediate/professional)
+            levels: Content complexity level (beginner/university/researcher)
             language: Programming language (default: python)
             
         Returns:
             Dict with code, explanation, and best practices
         """
         
-        # Difficulty-specific code generation instructions
-        difficulty_instructions = {
+        # Levels-specific code generation instructions
+        levels_instructions = {
             "beginner": """Generate beginner-friendly code:
 - Start with simple, clear examples
 - Use basic syntax and common patterns
@@ -346,25 +402,24 @@ Complexity: {complexity}"""),
 - Focus on readability and learning
 - Include print statements to show what's happening""",
             
-            "intermediate": """Generate intermediate-level code:
-- Use proper programming patterns and conventions
-- Include error handling and edge cases
-- Use standard library features appropriately
-- Balance readability with efficiency
-- Include docstrings and moderate comments
-- Show practical, real-world usage""",
+            "university": """Generate university-level code:
+- Use proper computer science principles and algorithms
+- Include theoretical concepts with practical implementation
+- Use appropriate data structures and design patterns
+- Balance academic rigor with practical application
+- Include docstrings and educational comments
+- Show correct algorithmic approaches""",
             
-            "professional": """Generate professional, production-ready code:
-- Follow industry best practices and design patterns
-- Include comprehensive error handling and validation
-- Use type hints, documentation, and minimal but precise comments
-- Optimize for performance and maintainability
-- Include testing considerations
-- Show enterprise-grade, scalable solutions
-- Follow PEP 8 and style guides religiously"""
+            "researcher": """Generate research-grade code:
+- Follow cutting-edge techniques and methodologies
+- Include performance optimization and scalability considerations
+- Use advanced language features and libraries
+- Emphasize experimental design and reproducibility
+- Include comprehensive documentation for publication
+- Show novel approaches and research-oriented solutions"""
         }
         
-        instruction = difficulty_instructions.get(difficulty, difficulty_instructions["intermediate"])
+        instruction = levels_instructions.get(levels, levels_instructions["beginner"])
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", f"""You are an expert software engineer creating {language} code examples.
@@ -374,7 +429,7 @@ Complexity: {complexity}"""),
 Return JSON format:
 {{{{
     "code": "Complete, working {language} code example",
-    "explanation": "Clear explanation of how the code works, tailored to {difficulty} level",
+    "explanation": "Clear explanation of how the code works, tailored to {levels} level",
     "key_concepts": ["Concept 1", "Concept 2", "Concept 3"],
     "best_practices": ["Best practice 1", "Best practice 2"],
     "usage_example": "How to run or use this code",
@@ -387,9 +442,8 @@ Requirements:
 - Follow {language} best practices and conventions
 - Include proper error handling (except for beginner level)
 - Use meaningful variable names
-- Make it production-quality for professional level
-- Adapt complexity to {difficulty} level"""),
-            ("human", "Topic: {topic}\nLanguage: {language}\nDifficulty: {difficulty}")
+- Adapt complexity and depth to {levels} level"""),
+            ("human", "Topic: {topic}\nLanguage: {language}\nContent Level: {levels}")
         ])
         
         chain = prompt | self.llm | self.json_parser
@@ -398,13 +452,12 @@ Requirements:
             result = chain.invoke({
                 "topic": topic,
                 "language": language,
-                "difficulty": difficulty
             })
             return result
         except Exception as e:
             # Fallback
             fallback_prompt = ChatPromptTemplate.from_messages([
-                ("system", f"Generate a {language} code example for the following topic at {difficulty} level:"),
+                ("system", f"Generate a {language} code example for the following topic at {levels} level:"),
                 ("human", "{topic}")
             ])
             fallback_chain = fallback_prompt | self.llm | self.str_parser

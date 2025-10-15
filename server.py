@@ -33,20 +33,20 @@ app.add_middleware(
 
 class ExplainRequest(BaseModel):
     question: str = Field(..., example="What is machine learning?")
-    difficulty: Optional[str] = Field("beginner", example="beginner")
+    levels: Optional[str] = Field("beginner", example="beginner")  # beginner, university, researcher
     session_id: Optional[str] = None
 
 class ExplainResponse(BaseModel):
     question: str
     explanation: str
     example: str
-    difficulty: str
+    levels: str  # beginner, university, researcher
     session_id: str
 
 class FlashcardRequest(BaseModel):
-    topic: str = Field(..., example="Neural Networks")
+    topic: Optional[str] = None  # Optional - uses session topic if not provided
     count: Optional[int] = Field(5, ge=1, le=20)
-    difficulty: Optional[str] = Field("intermediate", example="intermediate")
+    levels: Optional[str] = None  # Optional - uses session levels if not provided (beginner, university, researcher)
     session_id: Optional[str] = None
 
 class Flashcard(BaseModel):
@@ -59,9 +59,10 @@ class FlashcardResponse(BaseModel):
     session_id: str
 
 class QuizRequest(BaseModel):
-    topic: str = Field(..., example="Machine Learning Basics")
+    topic: Optional[str] = None  # Optional - uses session topic if not provided
     num_questions: Optional[int] = Field(5, ge=1, le=20)
-    difficulty: Optional[str] = Field("intermediate", example="intermediate")
+    levels: Optional[str] = None  # Optional - uses session levels if not provided (beginner, university, researcher)
+    quiz_difficulty: Optional[str] = Field("medium", example="medium")  # Question difficulty: easy, medium, hard
     session_id: Optional[str] = None
 
 class QuizQuestion(BaseModel):
@@ -76,7 +77,7 @@ class QuizResponse(BaseModel):
     session_id: str
 
 class DemoRequest(BaseModel):
-    concept: str = Field(..., example="Linear Regression")
+    concept: Optional[str] = None  # Optional - uses session topic if not provided
     session_id: Optional[str] = None
 
 class DemoResponse(BaseModel):
@@ -87,7 +88,7 @@ class DemoResponse(BaseModel):
     session_id: str
 
 class FlowchartRequest(BaseModel):
-    concept: str = Field(..., example="How Neural Networks Work")
+    concept: Optional[str] = None  # Optional - uses session topic if not provided
     session_id: Optional[str] = None
 
 class FlowchartResponse(BaseModel):
@@ -97,7 +98,7 @@ class FlowchartResponse(BaseModel):
     session_id: str
 
 class ThoughtRequest(BaseModel):
-    topic: str = Field(..., example="Artificial Intelligence")
+    topic: Optional[str] = None  # Optional - uses session topic if not provided
     count: Optional[int] = Field(3, ge=1, le=10)
     session_id: Optional[str] = None
 
@@ -118,8 +119,8 @@ class CodeExecutionResponse(BaseModel):
     session_id: str
 
 class ExampleCodeRequest(BaseModel):
-    topic: str = Field(..., example="File handling in Python")
-    difficulty: Optional[str] = Field("intermediate", example="intermediate")
+    topic: Optional[str] = None  # Optional - uses session topic if not provided
+    levels: Optional[str] = None  # Optional - uses session levels if not provided (beginner, university, researcher)
     language: Optional[str] = Field("python", example="python")
     session_id: Optional[str] = None
 
@@ -130,7 +131,7 @@ class ExampleCodeResponse(BaseModel):
     key_concepts: List[str]
     best_practices: List[str]
     usage_example: str
-    difficulty: str
+    levels: str  # beginner, university, researcher
     language: str
     session_id: str
 
@@ -185,7 +186,7 @@ def explain_concept(request: ExplainRequest):
     """
     Explain an AI/ML concept in simple terms with examples.
     Automatically creates or uses existing session for tracking.
-    Uses LangChain for refined responses.
+    Levels: beginner, university, researcher
     """
     # Create or get session
     session_id = request.session_id
@@ -194,15 +195,19 @@ def explain_concept(request: ExplainRequest):
     
     # Refine user input first
     refined_question = langchain_handler.refine_user_input(request.question)
+    levels = request.levels or "beginner"
+    
+    # Append topic to session (supports multiple topics)
+    session_manager.set_topic(session_id, refined_question, levels)
     
     # Save input
     session_manager.save_context(
         session_id, 
-        f"Topic: {refined_question}\nDifficulty: {request.difficulty}"
+        f"Topic: {refined_question}\nLevels: {levels}"
     )
     
     # Generate explanation using LangChain
-    result = langchain_handler.generate_explanation(refined_question, request.difficulty or "beginner")
+    result = langchain_handler.generate_explanation(refined_question, levels)
     
     # Save history
     session_manager.save_history(
@@ -216,25 +221,55 @@ def explain_concept(request: ExplainRequest):
         question=refined_question,
         explanation=result["explanation"],
         example=result["example"],
-        difficulty=request.difficulty or "beginner",
+        levels=levels,
         session_id=session_id
     )
 
 @app.post("/api/flashcards", response_model=FlashcardResponse)
 def generate_flashcards(request: FlashcardRequest):
+    """Generate educational flashcards. Requires session_id from /api/explain. Uses session topics automatically."""
+    # Require session_id
     session_id = request.session_id
-    if not session_id or not session_manager.session_exists(session_id):
-        session_id = session_manager.create_session()
-    refined_topic = langchain_handler.refine_user_input(request.topic)
-    difficulty = request.difficulty if request.difficulty else "intermediate"
+    if not session_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="session_id is required. Please call /api/explain first to create a session."
+        )
+    
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    
+    # If new topic provided, append it to session
+    if request.topic and request.topic.lower() != "string":
+        refined_new_topic = langchain_handler.refine_user_input(request.topic)
+        session_manager.set_topic(session_id, refined_new_topic, session_manager.get_levels(session_id))
+        primary_topic = refined_new_topic
+    else:
+        # Use session topic
+        primary_topic = session_manager.get_topic(session_id)
+        if not primary_topic:
+            raise HTTPException(
+                status_code=400, 
+                detail="No topic found in session. Please call /api/explain first to set a topic."
+            )
+    
+    # Get all topics for context
+    all_topics = session_manager.get_all_topics(session_id)
+    
+    # Get levels from session (or use provided levels as override)
+    levels = request.levels if (request.levels and request.levels.lower() != "string") else session_manager.get_levels(session_id)
+    
     session_manager.save_context(
         session_id, 
-        f"Generating {request.count} flashcards about: {refined_topic}\nDifficulty: {difficulty}"
+        f"Generating {request.count} flashcards about: {primary_topic}\nAll topics: {', '.join(all_topics)}\nLevels: {levels}"
     )
+    
+    # Generate flashcards focusing on primary topic but aware of all topics
     flashcard_data = langchain_handler.generate_flashcards(
-        refined_topic, 
+        primary_topic, 
         request.count or 5,
-        difficulty
+        levels,
+        all_topics=all_topics if len(all_topics) > 1 else None
     )
     
     flashcards = [
@@ -243,41 +278,75 @@ def generate_flashcards(request: FlashcardRequest):
     ]
     session_manager.save_history(
         session_id,
-        f"Generate flashcards for: {refined_topic}",
+        f"Generate flashcards for: {primary_topic}",
         f"Generated {len(flashcards)} flashcards",
         "flashcards"
     )
     
     return FlashcardResponse(
-        topic=refined_topic, 
+        topic=primary_topic,
         flashcards=flashcards, 
         session_id=session_id
     )
 
 @app.post("/api/quiz", response_model=QuizResponse)
 def generate_quiz(request: QuizRequest):
-    """Generate quiz questions. Tracks session automatically. Uses LangChain.
-    Difficulty levels: beginner, intermediate, professional"""
-    # Create or get session
+    """
+    Generate quiz questions with priority-based topic selection.
+    Requires session_id from /api/explain.
+    Can add new topic - quiz will prioritize new topic while including questions from previous topics.
+    """
+    # Require session_id
     session_id = request.session_id
-    if not session_id or not session_manager.session_exists(session_id):
-        session_id = session_manager.create_session()
+    if not session_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="session_id is required. Please call /api/explain first to create a session."
+        )
     
-    # Refine topic
-    refined_topic = langchain_handler.refine_user_input(request.topic)
-    difficulty = request.difficulty or "intermediate"
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
-    # Save input with difficulty
+    # If new topic provided, append it to session
+    if request.topic and request.topic.lower() != "string":
+        refined_new_topic = langchain_handler.refine_user_input(request.topic)
+        session_manager.set_topic(session_id, refined_new_topic, session_manager.get_levels(session_id))
+        primary_topic = refined_new_topic
+    else:
+        # Use most recent session topic
+        primary_topic = session_manager.get_topic(session_id)
+        if not primary_topic:
+            raise HTTPException(
+                status_code=400, 
+                detail="No topic found in session. Please call /api/explain first to set a topic."
+            )
+    
+    # Get all topics for context-aware generation
+    all_topics = session_manager.get_all_topics(session_id)
+    
+    # Get levels (content complexity) from session or request
+    levels = request.levels if (request.levels and request.levels.lower() != "string") else session_manager.get_levels(session_id)
+    
+    # Get quiz difficulty (question difficulty: easy, medium, hard)
+    quiz_difficulty = request.quiz_difficulty or "medium"
+    
+    # Save input
     session_manager.save_context(
         session_id, 
-        f"Generating {request.num_questions} quiz questions about: {refined_topic}\nDifficulty: {difficulty}"
+        f"Generating {request.num_questions} quiz questions\n"
+        f"Primary topic: {primary_topic}\n"
+        f"All topics: {', '.join(all_topics)}\n"
+        f"Content level: {levels}\n"
+        f"Quiz difficulty: {quiz_difficulty}"
     )
     
-    # Generate quiz using LangChain (returns a list directly)
+    # Generate quiz using LangChain with priority-based topic selection
     quiz_data = langchain_handler.generate_quiz(
-        refined_topic, 
+        primary_topic, 
         request.num_questions or 5,
-        difficulty
+        levels,
+        quiz_difficulty=quiz_difficulty,
+        all_topics=all_topics if len(all_topics) > 1 else None
     )
     
     # Convert to QuizQuestion objects
@@ -294,30 +363,48 @@ def generate_quiz(request: QuizRequest):
     # Save history
     session_manager.save_history(
         session_id,
-        f"Generate quiz for: {refined_topic}",
+        f"Generate quiz for: {primary_topic} ({quiz_difficulty} difficulty)",
         f"Generated {len(questions)} quiz questions",
         "quiz"
     )
     
     return QuizResponse(
-        topic=refined_topic, 
+        topic=primary_topic, 
         questions=questions, 
         session_id=session_id
     )
 
 @app.post("/api/demo", response_model=DemoResponse)
 def generate_demo(request: DemoRequest):
-    """Generate code demonstration. Tracks session automatically. Uses LangChain."""
-    # Create or get session
+    """Generate code demonstration. Requires session_id from /api/explain. Uses session topic automatically."""
+    # Require session_id
     session_id = request.session_id
-    if not session_id or not session_manager.session_exists(session_id):
-        session_id = session_manager.create_session()
+    if not session_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="session_id is required. Please call /api/explain first to create a session."
+        )
+    
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    
+    # Get concept from session (or use provided concept as override)
+    # Ignore placeholder values like "string"
+    concept = request.concept if (request.concept and request.concept.lower() != "string") else session_manager.get_topic(session_id)
+    if not concept:
+        raise HTTPException(
+            status_code=400, 
+            detail="No topic found in session. Please call /api/explain first to set a topic."
+        )
     
     # Refine concept
-    refined_concept = langchain_handler.refine_user_input(request.concept)
+    refined_concept = langchain_handler.refine_user_input(concept)
     
     # Save input
-    session_manager.save_context(session_id, f"Generating code demo for: {refined_concept}")
+    session_manager.save_context(
+        session_id, 
+        f"Generating code demo for: {refined_concept}"
+    )
     
     # Generate demo using LangChain
     demo_data = langchain_handler.generate_demo(refined_concept)
@@ -332,22 +419,37 @@ def generate_demo(request: DemoRequest):
     
     return DemoResponse(
         concept=refined_concept,
-        demo_code=demo_data["code"],
-        explanation=demo_data["explanation"],
-        output_example=demo_data["output"],
+        demo_code=demo_data.get("code", ""),
+        explanation=demo_data.get("explanation", ""),
+        output_example=demo_data.get("output", ""),
         session_id=session_id
     )
 
 @app.post("/api/flowchart", response_model=FlowchartResponse)
 def generate_flowchart(request: FlowchartRequest):
-    """Generate flowchart/process diagram. Tracks session automatically. Uses LangChain."""
-    # Create or get session
+    """Generate flowchart/process diagram. Requires session_id from /api/explain. Uses session topic automatically."""
+    # Require session_id
     session_id = request.session_id
-    if not session_id or not session_manager.session_exists(session_id):
-        session_id = session_manager.create_session()
+    if not session_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="session_id is required. Please call /api/explain first to create a session."
+        )
+    
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    
+    # Get concept from session (or use provided concept as override)
+    # Ignore placeholder values like "string"
+    concept = request.concept if (request.concept and request.concept.lower() != "string") else session_manager.get_topic(session_id)
+    if not concept:
+        raise HTTPException(
+            status_code=400, 
+            detail="No topic found in session. Please call /api/explain first to set a topic."
+        )
     
     # Refine concept
-    refined_concept = langchain_handler.refine_user_input(request.concept)
+    refined_concept = langchain_handler.refine_user_input(concept)
     
     # Save input
     session_manager.save_context(session_id, f"Generating flowchart for: {refined_concept}")
@@ -372,14 +474,29 @@ def generate_flowchart(request: FlowchartRequest):
 
 @app.post("/api/thought-questions", response_model=ThoughtResponse)
 def generate_thought_questions(request: ThoughtRequest):
-    """Generate thought-provoking questions. Tracks session automatically. Uses LangChain."""
-    # Create or get session
+    """Generate thought-provoking questions. Requires session_id from /api/explain. Uses session topic automatically."""
+    # Require session_id
     session_id = request.session_id
-    if not session_id or not session_manager.session_exists(session_id):
-        session_id = session_manager.create_session()
+    if not session_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="session_id is required. Please call /api/explain first to create a session."
+        )
+    
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    
+    # Get topic from session (or use provided topic as override)
+    # Ignore placeholder values like "string"
+    topic = request.topic if (request.topic and request.topic.lower() != "string") else session_manager.get_topic(session_id)
+    if not topic:
+        raise HTTPException(
+            status_code=400, 
+            detail="No topic found in session. Please call /api/explain first to set a topic."
+        )
     
     # Refine topic
-    refined_topic = langchain_handler.refine_user_input(request.topic)
+    refined_topic = langchain_handler.refine_user_input(topic)
     
     # Save input
     session_manager.save_context(
@@ -406,11 +523,17 @@ def generate_thought_questions(request: ThoughtRequest):
 
 @app.post("/api/execute-code", response_model=CodeExecutionResponse)
 def execute_code(request: CodeExecutionRequest):
-    """Analyze/execute code (simulated). Tracks session automatically. Uses LangChain."""
-    # Create or get session
+    """Analyze/execute code (simulated). Requires session_id from /api/explain."""
+    # Require session_id
     session_id = request.session_id
-    if not session_id or not session_manager.session_exists(session_id):
-        session_id = session_manager.create_session()
+    if not session_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="session_id is required. Please call /api/explain first to create a session."
+        )
+    
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
     # Save input
     session_manager.save_context(session_id, f"Analyzing {request.language} code execution")
@@ -444,36 +567,53 @@ def execute_code(request: CodeExecutionRequest):
 def generate_example_code(request: ExampleCodeRequest):
     """
     Generate professional, production-ready code examples.
-    Tracks session automatically. Uses LangChain.
+    Requires session_id from /api/explain. Uses session topic automatically.
     Difficulty levels: beginner, intermediate, professional
     """
-    # Create or get session
+    # Require session_id
     session_id = request.session_id
-    if not session_id or not session_manager.session_exists(session_id):
-        session_id = session_manager.create_session()
+    if not session_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="session_id is required. Please call /api/explain first to create a session."
+        )
     
-    # Refine topic
-    refined_topic = langchain_handler.refine_user_input(request.topic)
-    difficulty = request.difficulty or "intermediate"
+    if not session_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    
+    # Get topic from session (or use provided topic as override)
+    # Ignore placeholder values like "string"
+    topic = request.topic if (request.topic and request.topic.lower() != "string") else session_manager.get_topic(session_id)
+    if not topic:
+        raise HTTPException(
+            status_code=400, 
+            detail="No topic found in session. Please call /api/explain first to set a topic."
+        )
+    
+    # Get levels from session (or use provided levels as override)
+    levels = request.levels if (request.levels and request.levels.lower() != "string") else session_manager.get_levels(session_id)
     language = request.language or "python"
     
-    # Save input with difficulty level
+    # Refine topic
+    refined_topic = langchain_handler.refine_user_input(topic)
+    
+    # Save input with levels
     session_manager.save_context(
         session_id, 
-        f"Generating {language} code example for: {refined_topic}\nDifficulty: {difficulty}"
+        f"Generating {language} code example for: {refined_topic}\nLevels: {levels}"
     )
     
     # Generate code example using LangChain
     code_result = langchain_handler.generate_example_code(
         refined_topic, 
-        difficulty,
+        levels,
         language
     )
     
     # Save history
     session_manager.save_history(
         session_id,
-        f"Generate {language} code for: {refined_topic} ({difficulty})",
+        f"Generate {language} code for: {refined_topic} ({levels})",
         f"Code example generated with {len(code_result.get('best_practices', []))} best practices",
         "example_code"
     )
@@ -485,7 +625,7 @@ def generate_example_code(request: ExampleCodeRequest):
         key_concepts=code_result.get("key_concepts", []),
         best_practices=code_result.get("best_practices", []),
         usage_example=code_result.get("usage_example", ""),
-        difficulty=difficulty,
+        levels=levels,
         language=language,
         session_id=session_id
     )
