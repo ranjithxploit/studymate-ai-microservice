@@ -23,7 +23,6 @@ class LangChainHandler:
             convert_system_message_to_human=True
         )
         
-        # Output parsers
         self.str_parser = StrOutputParser()
         self.json_parser = JsonOutputParser()
     
@@ -52,22 +51,10 @@ Keep the user's intent but make it clearer and more professional."""),
     def generate_explanation(
         self, 
         question: str, 
-        levels: str = "beginner",  # Changed from 'difficulty' to 'levels'
+        levels: str = "beginner",
         context: str = ""
     ) -> Dict[str, str]:
-        """
-        Generate comprehensive explanation with structured output
-        
-        Args:
-            question: The question to explain
-            levels: Content complexity level (beginner/university/researcher)
-            context: Additional context
-            
-        Returns:
-            Dict with explanation, example, and key_points
-        """
-        
-        # Define levels-specific system prompts
+
         levels_prompts = {
             "beginner": """You are a friendly and patient teacher explaining to absolute beginners. 
 - Use simple, everyday language with NO jargon
@@ -118,7 +105,6 @@ Remember: Adapt your language, depth, and examples specifically for {levels} lea
             })
             return result
         except Exception as e:
-            # Fallback to simple format
             fallback_prompt = ChatPromptTemplate.from_messages([
                 ("system", f"Explain the following at {levels} level with an example:"),
                 ("human", "{question}")
@@ -137,23 +123,10 @@ Remember: Adapt your language, depth, and examples specifically for {levels} lea
         self, 
         topic: str, 
         count: int = 5,
-        levels: str = "beginner",  # Changed from difficulty to levels
-        all_topics: Optional[List[str]] = None  # Support for multiple topics
+        levels: str = "beginner", 
+        all_topics: Optional[List[str]] = None
     ) -> List[Dict[str, str]]:
-        """
-        Generate educational flashcards with LangChain
-        
-        Args:
-            topic: Primary topic for flashcards
-            count: Number of flashcards
-            levels: Content complexity level (beginner/university/researcher)
-            all_topics: Optional list of all session topics for context
-            
-        Returns:
-            List of flashcard dictionaries
-        """
-        
-        # Levels-specific instructions
+
         levels_instructions = {
             "beginner": """Create flashcards for absolute beginners:
 - Use simple, clear language without jargon
@@ -174,9 +147,7 @@ Remember: Adapt your language, depth, and examples specifically for {levels} lea
 - Include complex scenarios and theoretical implications"""
         }
         
-        instruction = levels_instructions.get(levels, levels_instructions["beginner"])
-        
-        # Build context about all topics if provided
+        instruction = levels_instructions.get(levels, levels_instructions["beginner"])        
         topics_context = ""
         if all_topics and len(all_topics) > 1:
             topics_context = f"\n\nSession Context: This session has covered these topics in order: {', '.join(all_topics)}. Focus primarily on '{topic}' but you may include some questions from previous topics for reinforcement."
@@ -209,33 +180,17 @@ Adapt complexity and terminology to {levels} level."""),
             })
             return result if isinstance(result, list) else []
         except Exception as e:
-            # Fallback
             return [{"front": f"Question about {topic}", "back": "Answer", "hint": ""}]
     
     def generate_quiz(
         self, 
         topic: str, 
         count: int = 5,
-        levels: str = "beginner",  # Changed from difficulty to levels (content complexity)
-        quiz_difficulty: str = "medium",  # NEW: Question difficulty (easy/medium/hard)
-        all_topics: Optional[List[str]] = None  # Support for priority-based multi-topic quizzes
+        levels: str = "beginner", 
+        quiz_difficulty: str = "medium",
+        all_topics: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Generate quiz questions with priority-based topic selection
-        
-        Args:
-            topic: Primary topic for quiz (gets priority)
-            count: Number of questions
-            levels: Content complexity level (beginner/university/researcher)
-            quiz_difficulty: Question difficulty (easy/medium/hard)
-            all_topics: Optional list of all session topics - if provided, quiz will prioritize 
-                       the main topic but include some questions from earlier topics
-            
-        Returns:
-            List of quiz question dictionaries
-        """
-        
-        # Levels-specific quiz instructions (content complexity)
+
         levels_instructions = {
             "beginner": """Content Level: Beginner
 - Focus on basic concepts and fundamental understanding
@@ -256,7 +211,6 @@ Adapt complexity and terminology to {levels} level."""),
 - Require critical analysis and deep domain expertise"""
         }
         
-        # Quiz difficulty instructions (question difficulty)
         quiz_difficulty_instructions = {
             "easy": """Question Difficulty: Easy
 - Make correct answers relatively obvious
@@ -280,7 +234,6 @@ Adapt complexity and terminology to {levels} level."""),
         levels_instruction = levels_instructions.get(levels, levels_instructions["beginner"])
         difficulty_instruction = quiz_difficulty_instructions.get(quiz_difficulty, quiz_difficulty_instructions["medium"])
         
-        # Build priority-based topic instruction
         priority_instruction = ""
         if all_topics and len(all_topics) > 1:
             other_topics = [t for t in all_topics if t != topic]
@@ -329,17 +282,7 @@ Balance content complexity ({levels}) with question difficulty ({quiz_difficulty
     def generate_demo(
         self, 
         concept: str
-    ) -> Dict[str, Any]:
-        """
-        Generate step-by-step code demonstration
-        
-        Args:
-            concept: Concept to demonstrate
-            
-        Returns:
-            Dict with code, explanation, and output
-        """
-        
+    ) -> Dict[str, Any]:        
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a coding instructor creating clear, practical demonstrations.
 
@@ -367,7 +310,6 @@ Make the demonstration practical and educational."""),
             result = chain.invoke({"concept": concept})
             return result
         except Exception as e:
-            # Fallback
             return {
                 "code": f"# Demonstration of {concept}\nprint('Example code')",
                 "explanation": f"This demonstrates {concept}",
@@ -377,22 +319,10 @@ Make the demonstration practical and educational."""),
     def generate_example_code(
         self,
         topic: str,
-        levels: str = "beginner",  # Changed from difficulty to levels
+        levels: str = "beginner",
         language: str = "python"
     ) -> Dict[str, Any]:
-        """
-        Generate professional, production-ready code examples
-        
-        Args:
-            topic: Programming topic or concept
-            levels: Content complexity level (beginner/university/researcher)
-            language: Programming language (default: python)
-            
-        Returns:
-            Dict with code, explanation, and best practices
-        """
-        
-        # Levels-specific code generation instructions
+
         levels_instructions = {
             "beginner": """Generate beginner-friendly code:
 - Start with simple, clear examples
@@ -455,7 +385,6 @@ Requirements:
             })
             return result
         except Exception as e:
-            # Fallback
             fallback_prompt = ChatPromptTemplate.from_messages([
                 ("system", f"Generate a {language} code example for the following topic at {levels} level:"),
                 ("human", "{topic}")
@@ -474,15 +403,6 @@ Requirements:
             }
     
     def generate_flowchart(self, concept: str) -> Dict[str, Any]:
-        """
-        Generate flowchart structure in Mermaid format
-        
-        Args:
-            concept: Concept to create flowchart for
-            
-        Returns:
-            Dict with flowchart data
-        """
         prompt = ChatPromptTemplate.from_messages([
             ("system", """Create a flowchart for the given concept. Return JSON:
 {{
@@ -516,16 +436,7 @@ Use proper Mermaid.js syntax."""),
         topic: str,
         count: int = 5
     ) -> List[str]:
-        """
-        Generate thought-provoking questions
-        
-        Args:
-            topic: Topic for questions
-            count: Number of questions
-            
-        Returns:
-            List of thought-provoking questions
-        """
+
         prompt = ChatPromptTemplate.from_messages([
             ("system", """Generate {count} thought-provoking, open-ended questions that encourage critical thinking.
 
@@ -553,16 +464,6 @@ Questions should:
         code: str, 
         language: str = "python"
     ) -> Dict[str, Any]:
-        """
-        Analyze code and provide insights
-        
-        Args:
-            code: Code to analyze
-            language: Programming language
-            
-        Returns:
-            Analysis results
-        """
         prompt = ChatPromptTemplate.from_messages([
             ("system", """Analyze the provided {language} code. Return JSON:
 {{
@@ -591,15 +492,6 @@ Questions should:
             }
     
     def summarize_context(self, context_list: List[str]) -> str:
-        """
-        Summarize multiple context entries into coherent summary
-        
-        Args:
-            context_list: List of context entries
-            
-        Returns:
-            Summarized context
-        """
         if not context_list:
             return "No context available"
         
@@ -616,16 +508,6 @@ Questions should:
         return result.strip()
     
     def extract_pdf_insights(self, pdf_text: str, query: str = "") -> Dict[str, Any]:
-        """
-        Extract key insights from PDF content
-        
-        Args:
-            pdf_text: Extracted PDF text
-            query: Optional specific query about the PDF
-            
-        Returns:
-            Dict with insights
-        """
         if query:
             prompt = ChatPromptTemplate.from_messages([
                 ("system", """Analyze the PDF content and answer the query. Return JSON:
@@ -663,11 +545,9 @@ Questions should:
             }
 
 
-# Singleton instance
 _langchain_handler = None
 
 def get_langchain_handler() -> LangChainHandler:
-    """Get or create singleton LangChain handler instance"""
     global _langchain_handler
     if _langchain_handler is None:
         _langchain_handler = LangChainHandler()
