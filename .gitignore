@@ -1,42 +1,20 @@
-# Python AI Server - .gitignore
-
-# ===========================
-# Session & Context Files
-# ===========================
-# IMPORTANT: Keep session data local for security
 context/
 *.txt
 *.pdf
-
-# ===========================
-# Vector Database
-# ===========================
-# IMPORTANT: Keep vector DB local (can be large)
 vector_db/
 *.db
 *.sqlite
-
-# ===========================
-# Environment Variables
-# ===========================
-# CRITICAL: Never commit API keys or secrets
 .env
 .env.local
 .env.*.local
 *.key
+*.env
 
-# ===========================
-# Python
-# ===========================
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 
-# C extensions
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
